@@ -30,8 +30,8 @@ async def clock_updater():
     global clock_enabled
     while True:
         if clock_enabled:
+            tehran_tz = pytz.timezone("Asia/Tehran")
             now = datetime.now(tehran_tz).strftime("%H:%M")
-            print("⏰ ساعت تهران:", now)
             try:
                 await client(UpdateProfileRequest(
                     last_name=f"❤ {now}"
@@ -76,5 +76,6 @@ if __name__ == "__main__":
     print("🚀 در حال اجرا ...")
     with client:
         client.loop.run_until_complete(main())
+
 
 
