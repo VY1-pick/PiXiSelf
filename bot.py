@@ -34,7 +34,7 @@ async def clock_updater():
             print("⏰ ساعت تهران:", now)
             try:
                 await client(UpdateProfileRequest(
-                    last_name=f"⏰ {now}"
+                    last_name=f"❤ {now}"
                 ))
                 print(f"✅ ساعت آپدیت شد: {now}")
             except Exception as e:
@@ -76,4 +76,5 @@ if __name__ == "__main__":
     print("🚀 در حال اجرا ...")
     with client:
         client.loop.run_until_complete(main())
+
 
