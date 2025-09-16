@@ -1,6 +1,9 @@
+from telethon.tl.functions.account import UpdateProfileRequest
 import os
+from datetime import datetime
 import sys
 from telethon import TelegramClient, events
+import asyncio
 
 # گرفتن API_ID و API_HASH از Environment Variables
 API_ID = int(os.environ.get("API_ID", "0"))
@@ -14,21 +17,57 @@ if not os.path.exists(f"{SESSION_NAME}.session"):
           "و فایل pixiself_session.session رو توی ریپو بذار.")
     sys.exit(1)
 
-# ساخت کلاینت بدون پروکسی
 client = TelegramClient(SESSION_NAME, API_ID, API_HASH)
 
-# مثال ساده از هندلر
+# وضعیت ساعت (فعال/غیرفعال)
+clock_enabled = False
+
+async def clock_updater():
+    global clock_enabled
+    while True:
+        if clock_enabled:
+            now = datetime.now().strftime("%H:%M")
+            try:
+                await client(UpdateProfileRequest(
+                    last_name=f"⏰ {now}"
+                ))
+                print(f"✅ ساعت آپدیت شد: {now}")
+            except Exception as e:
+                print("❌ خطا در آپدیت ساعت:", e)
+        await asyncio.sleep(60)  # هر ۶۰ ثانیه
+
+# هندلر تستی
 @client.on(events.NewMessage(pattern="سلام"))
 async def handler(event):
-    await event.reply("سلام از Render 👋 (بدون پروکسی)")
+    await event.reply("سلام از PiXiSelf 👋")
+
+# فعال/غیرفعال کردن ساعت با دستور "ساعت"
+@client.on(events.NewMessage(pattern="ساعت"))
+async def toggle_clock(event):
+    global clock_enabled
+    if clock_enabled:
+        clock_enabled = False
+        # پاک کردن last name
+        await client(UpdateProfileRequest(last_name=""))
+        await event.reply("❌ ساعت غیرفعال شد")
+    else:
+        clock_enabled = True
+        await event.reply("⏰ ساعت فعال شد")
 
 async def main():
     me = await client.get_me()
     print(f"✅ لاگین شدی به عنوان: {getattr(me, 'username', me.id)}")
-    await client.send_message("me", "بوت روی Render بالا اومد ✅ (بدون پروکسی)")
+
+    # پیام خوشامد توی Saved Messages
+    await client.send_message("me", "PiXiSelf آماده به کار هستش ✅")
+
+    # اجرای ساعت در بک‌گراند
+    client.loop.create_task(clock_updater())
+
+    # منتظر بودن برای پیام‌ها
     await client.run_until_disconnected()
 
 if __name__ == "__main__":
-    print("🚀 در حال اجرا (بدون پروکسی)...")
+    print("🚀 در حال اجرا ...")
     with client:
         client.loop.run_until_complete(main())
