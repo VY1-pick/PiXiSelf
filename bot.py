@@ -1,6 +1,7 @@
 from telethon.tl.functions.account import UpdateProfileRequest
 import os
 from datetime import datetime
+import pytz
 import sys
 from telethon import TelegramClient, events
 import asyncio
@@ -8,6 +9,9 @@ import asyncio
 # گرفتن API_ID و API_HASH از Environment Variables
 API_ID = int(os.environ.get("API_ID", "0"))
 API_HASH = os.environ.get("API_HASH", "")
+
+# تعریف timezone تهران
+tehran_tz = pytz.timezone("Asia/Tehran")
 
 # نام فایل session
 SESSION_NAME = "pixiself_session"
@@ -26,7 +30,8 @@ async def clock_updater():
     global clock_enabled
     while True:
         if clock_enabled:
-            now = datetime.now().strftime("%H:%M")
+            now = datetime.now(tehran_tz).strftime("%H:%M")
+            print("⏰ ساعت تهران:", now)
             try:
                 await client(UpdateProfileRequest(
                     last_name=f"⏰ {now}"
@@ -71,3 +76,4 @@ if __name__ == "__main__":
     print("🚀 در حال اجرا ...")
     with client:
         client.loop.run_until_complete(main())
+
