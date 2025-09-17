@@ -12,6 +12,16 @@ from telethon import TelegramClient, events
 import time
 import asyncio
 
+days_fa = {
+    "Saturday": "شنبه",
+    "Sunday": "یک‌شنبه",
+    "Monday": "دوشنبه",
+    "Tuesday": "سه‌شنبه",
+    "Wednesday": "چهارشنبه",
+    "Thursday": "پنج‌شنبه",
+    "Friday": "جمعه",
+    }
+
 # تنظیمات فونت فارسی برای matplotlib
 matplotlib.rcParams['font.family'] = 'DejaVu Sans'
 
@@ -79,16 +89,6 @@ async def getping(event):
 async def getTime(event):
     if not event.out:
         return
-    
-    days_fa = {
-    "Saturday": "شنبه",
-    "Sunday": "یک‌شنبه",
-    "Monday": "دوشنبه",
-    "Tuesday": "سه‌شنبه",
-    "Wednesday": "چهارشنبه",
-    "Thursday": "پنج‌شنبه",
-    "Friday": "جمعه",
-    }
 
     now = datetime.now(tehran_tz).strftime("%H:%M")
     weekday = datetime.now(tehran_tz).strftime("%A")
@@ -118,127 +118,95 @@ async def toggle_clock(event):
         clock_enabled = True
         await event.reply("⏰ ساعت فعال شد")
 
-
-def get_days_in_month(year, month):
-    """تعداد روزهای یک ماه شمسی رو برمی‌گردونه"""
-    # ۳۱ روزه‌ها
-    if month <= 6:
-        return 31
-    # ۳۰ روزه‌ها
-    if month <= 11:
-        return 30
-    # اسفند → بستگی به کبیسه بودن داره
-    return 30 if jdatetime.JalaliDate.isleap(year) else 29
-
-
-def make_calendar_image(year, month):
-    # نام ماه‌های فارسی
-    persian_months = [
-        "فروردین", "اردیبهشت", "خرداد", "تیر", "مرداد", "شهریور",
-        "مهر", "آبان", "آذر", "دی", "بهمن", "اسفند"
-    ]
-    
-    # نام روزهای هفته به فارسی
-    week_days = ["شنبه","یکشنبه","دوشنبه","سه‌شنبه","چهارشنبه","پنجشنبه","جمعه"]
-
-    # پیدا کردن روز اول ماه (شنبه=0)
-    first_day = jdatetime.date(year, month, 1).togregorian().weekday()
-    start_day = (first_day + 1) % 7  
-
-    # تعداد روزهای ماه
-    days_in_month = get_days_in_month(year, month)
-
-    # ساخت جدول روزها
-    cal = []
-    week = [""] * 7
-    day = 1
-    for i in range(start_day, 7):
-        week[i] = str(day)
-        day += 1
-    cal.append(week)
-
-    while day <= days_in_month:
-        week = []
-        for i in range(7):
-            if day <= days_in_month:
-                week.append(str(day))
-                day += 1
-            else:
-                week.append("")
-        cal.append(week)
-
-    # ساخت تصویر با matplotlib
+def make_calendar_image_gregorian(year, month, out_path="calendar.png"):
+    cal = calendar.monthcalendar(year, month)
     fig, ax = plt.subplots(figsize=(9, 6))
-    ax.set_facecolor("#f0f8ff")  # بکگراند ملایم آبی
     ax.axis('off')
+    ax.set_title(f"{calendar.month_name[month]} {year}", fontsize=16)
 
-    # عنوان
-    ax.set_title(f"{persian_months[month-1]} {year}", fontsize=20, fontweight="bold", color="#2c3e50")
-
-    # ساخت جدول
     table = ax.table(
         cellText=cal,
-        colLabels=week_days,
+        colLabels=["Mo","Tu","We","Th","Fr","Sa","Su"],
         loc='center',
         cellLoc='center'
     )
-
-    # استایل جدول
-    table.scale(1.2, 1.8)
+    table.scale(1, 2)
+    # کمی استایل برای خواناتر شدن
     for key, cell in table.get_celld().items():
+        cell.set_edgecolor("gray")
         cell.set_linewidth(0.5)
-        cell.set_edgecolor("#34495e")
-        cell.set_facecolor("#ecf0f1")
-        cell.set_fontsize(12)
-
-    # رنگ جمعه‌ها (ستون آخر)
-    for row in range(len(cal)+1):  # +1 چون header هم داریم
-        table[(row, 6)].set_facecolor("#ffcccc")
-
-    plt.savefig("calendar.png", bbox_inches="tight")
+    plt.savefig(out_path, bbox_inches="tight")
     plt.close()
 
-def get_holidays(days=7):
-    today = jdatetime.date.today()
-    holidays = []
+def get_holidays_next_days(days=7):
+    tz = ZoneInfo("Asia/Tehran")
+    now = datetime.now(tz)
+    results = []
 
     for i in range(days):
-        d = today + jdatetime.timedelta(days=i)
-        url = f"{HOLIDAY_API}{d.year}/{d.month}/{d.day}"
+        d = now + timedelta(days=i)
+        jd = jdatetime.date.fromgregorian(date=d)
+        url = f"https://holidayapi.ir/jalali/{jd.year}/{jd.month}/{jd.day}"
         try:
-            res = requests.get(url).json()
-            if "events" in res and res["events"]:
-                holidays.append(f"{d} → {', '.join(res['events'])}")
+            res = requests.get(url, timeout=6).json()
         except Exception:
+            results.append((jd, d, False, []))
             continue
 
-    return holidays if holidays else ["هیچ تعطیلی یا مناسبتی در ۷ روز آینده نیست."]
+        is_holiday = res.get("is_holiday", False)
+        events = []
+        for ev in res.get("events", []):
+            # اگر event به صورت dict باشه یا str، سعی می‌کنیم متنش رو بگیریم
+            if isinstance(ev, dict):
+                events.append(ev.get("description") or ev.get("title") or str(ev))
+            else:
+                events.append(str(ev))
+        results.append((jd, d, is_holiday, events))
+    return results
 
 # هندلر برای تاریخ/تقویم
-@client.on(events.NewMessage(pattern="^(تاریخ|تقویم)$"))
+@client.on(events.NewMessage(pattern=r"^(تاریخ|تقویم)$"))
 async def send_calendar(event):
-    if not event.out:  # فقط پیام‌های خودت
+    # فقط وقتی خودت فرستادی اجرا کن
+    if not event.out:
         return
 
-    # تاریخ امروز
-    today_jalali = jdatetime.date.today()
-    today_gregorian = datetime.today().date()
+    tz = ZoneInfo("Asia/Tehran")
+    now = datetime.now(tz)
+    # تاریخ شمسی امروز
+    jtoday = jdatetime.date.fromgregorian(date=now)
+    jalali_str = jtoday.strftime("%Y/%m/%d")        # عددی شمسی
+    gregorian_str = now.strftime("%Y/%m/%d")        # عددی میلادی
+    weekday_fa = days_fa.get(now.strftime("%A"), now.strftime("%A"))
 
-    # گرفتن مناسبت‌ها
-    holidays = get_holidays(7)
+    # مناسبت‌ها/تعطیلات 7 روز آینده
+    items = get_holidays_next_days(7)
+    lines = []
+    for jd, gd, is_hol, evs in items:
+        day_label = f"{jd.strftime('%Y/%m/%d')} (معادل {gd.strftime('%Y/%m/%d')})"
+        status = "🔴 تعطیل" if is_hol else "—"
+        if evs:
+            lines.append(f"• {day_label}: {status} — {'; '.join(evs)}")
+        else:
+            lines.append(f"• {day_label}: {status}")
 
-    # ساخت عکس تقویم
-    make_calendar_image(today_jalali.year, today_jalali.month)
+    if not lines:
+        lines_text = "هیچ مناسبت یا تعطیلی در ۷ روز آینده ثبت نشده."
+    else:
+        lines_text = "\n".join(lines)
 
-    # متن نهایی
-    text = (
-        f"📌 امروز: {today_jalali.strftime('%A %d %B %Y')} (شمسی)\n"
-        f"📌 معادل میلادی: {today_gregorian.strftime('%A %d %B %Y')}\n\n"
-        f"📅 مناسبت‌ها و تعطیلات ۷ روز آینده:\n" +
-        "\n".join(holidays)
+    # ساخت عکس تقویم میلادی (ماه جاری) — همین که قبلاً می‌پسندیدی
+    make_calendar_image_gregorian(now.year, now.month, out_path="calendar.png")
+
+    # کپشن فارسی (این رو توی کپشن عکس می‌فرستیم)
+    caption = (
+        f"📌 امروز (شمسی): {jalali_str} — {weekday_fa}\n"
+        f"📌 معادل میلادی: {gregorian_str}\n\n"
+        f"📅 مناسبت‌ها و تعطیلات ۷ روز آینده:\n{lines_text}"
     )
 
-    await client.send_file("me", "calendar.png", caption=text)
+    # ارسال به Saved Messages (یا می‌تونی event.reply کنی)
+    await client.send_file("me", "calendar.png", caption=caption)
 
 
 
@@ -259,6 +227,7 @@ if __name__ == "__main__":
     print("🚀 در حال اجرا ...")
     with client:
         client.loop.run_until_complete(main())
+
 
 
 
