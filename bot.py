@@ -4,6 +4,7 @@ from datetime import datetime
 import pytz
 import sys
 from telethon import TelegramClient, events
+import time
 import asyncio
 
 # گرفتن API_ID و API_HASH از Environment Variables
@@ -100,6 +101,7 @@ if __name__ == "__main__":
     print("🚀 در حال اجرا ...")
     with client:
         client.loop.run_until_complete(main())
+
 
 
 
