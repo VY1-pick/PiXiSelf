@@ -54,7 +54,9 @@ async def handler(event):
 
 @client.on(events.NewMessage(pattern="پینگ"))
 async def getping(event):
-    if event.out:
+    if not event.out:
+        return
+        
         start = time.time()
         msg = await event.reply("🏓 پینگ...")
         end = time.time()
@@ -66,6 +68,10 @@ async def getping(event):
 @client.on(events.NewMessage(pattern="ساعت"))
 async def toggle_clock(event):
     global clock_enabled
+    
+    if not event.out:
+        return
+        
     if clock_enabled:
         clock_enabled = False
         # پاک کردن last name
@@ -94,6 +100,7 @@ if __name__ == "__main__":
     print("🚀 در حال اجرا ...")
     with client:
         client.loop.run_until_complete(main())
+
 
 
 
