@@ -1,15 +1,26 @@
 from telethon.tl.functions.account import UpdateProfileRequest
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
+import requests
+import jdatetime
+import calendar
+import matplotlib.pyplot as plt
+import matplotlib
 import pytz
 import sys
 from telethon import TelegramClient, events
 import time
 import asyncio
 
+# تنظیمات فونت فارسی برای matplotlib
+matplotlib.rcParams['font.family'] = 'DejaVu Sans'
+
 # گرفتن API_ID و API_HASH از Environment Variables
 API_ID = int(os.environ.get("API_ID", "0"))
 API_HASH = os.environ.get("API_HASH", "")
+
+# توکن API تعطیلات
+HOLIDAY_API = "https://holidayapi.ir/jalali/"
 
 # تعریف timezone تهران
 tehran_tz = pytz.timezone("Asia/Tehran")
@@ -31,7 +42,6 @@ async def clock_updater():
     global clock_enabled
     while True:
         if clock_enabled:
-            tehran_tz = pytz.timezone("Asia/Tehran")
             now = datetime.now(tehran_tz).strftime("%H:%M")
             try:
                 await client(UpdateProfileRequest(
@@ -65,7 +75,7 @@ async def getping(event):
     latency = int((end - start) * 1000)
     await msg.edit(f"🏓 پینگ: {latency} ms\n✅ سرور فعاله")
 
-@client.on(events.NewMessage(pattern="^(ساعت|امروز|تاریخ)$"))
+@client.on(events.NewMessage(pattern="^(ساعت|امروز)$"))
 async def getTime(event):
     if not event.out:
         return
@@ -82,7 +92,7 @@ async def getTime(event):
 
     now = datetime.now(tehran_tz).strftime("%H:%M")
     weekday = datetime.now(tehran_tz).strftime("%A")
-    date = datetime.now(tehran_tz).strftime("%Y/%m/%d")
+    date = jdatetime.date.today.strftime("%Y/%m/%d")
     weekday_fa = days_fa[weekday]
 
     await event.reply(
@@ -109,13 +119,72 @@ async def toggle_clock(event):
         await event.reply("⏰ ساعت فعال شد")
 
 
+def make_calendar_image(year, month):
+    cal = calendar.monthcalendar(year, month)
+    fig, ax = plt.subplots(figsize=(8, 6))
+    ax.axis('off')
+    ax.set_title(f"📅 {year}/{month}", fontsize=18, fontweight="bold")
+
+    table = ax.table(
+        cellText=cal,
+        colLabels=["د", "س", "چ", "پ", "ج", "ش", "ی"],
+        loc='center',
+        cellLoc='center'
+    )
+    table.scale(1, 2)
+    plt.savefig("calendar.png")
+    plt.close()
+
+def get_holidays(days=7):
+    today = jdatetime.date.today()
+    holidays = []
+
+    for i in range(days):
+        d = today + jdatetime.timedelta(days=i)
+        url = f"{HOLIDAY_API}{d.year}/{d.month}/{d.day}"
+        try:
+            res = requests.get(url).json()
+            if "events" in res and res["events"]:
+                holidays.append(f"{d} → {', '.join(res['events'])}")
+        except Exception:
+            continue
+
+    return holidays if holidays else ["هیچ تعطیلی یا مناسبتی در ۷ روز آینده نیست."]
+
+# هندلر برای تاریخ/تقویم
+@client.on(events.NewMessage(pattern="^(تاریخ|تقویم)$"))
+async def send_calendar(event):
+    if not event.out:  # فقط پیام‌های خودت
+        return
+
+    # تاریخ امروز
+    today_jalali = jdatetime.date.today()
+    today_gregorian = datetime.today().date()
+
+    # گرفتن مناسبت‌ها
+    holidays = get_holidays(7)
+
+    # ساخت عکس تقویم
+    make_calendar_image(today_jalali.year, today_jalali.month)
+
+    # متن نهایی
+    text = (
+        f"📌 امروز: {today_jalali.strftime('%A %d %B %Y')} (شمسی)\n"
+        f"📌 معادل میلادی: {today_gregorian.strftime('%A %d %B %Y')}\n\n"
+        f"📅 مناسبت‌ها و تعطیلات ۷ روز آینده:\n" +
+        "\n".join(holidays)
+    )
+
+    await client.send_file("me", "calendar.png", caption=text)
+
+
 
 async def main():
     me = await client.get_me()
     print(f"✅ لاگین شدی به عنوان: {getattr(me, 'username', me.id)}")
 
     # پیام خوشامد توی Saved Messages
-    await client.send_message("me", "PiXiSelf آماده به کار هستش ✅")
+    await client.send_message("me", "KishMish آماده به کار هستش ✅")
 
     # اجرای ساعت در بک‌گراند
     client.loop.create_task(clock_updater())
@@ -127,16 +196,3 @@ if __name__ == "__main__":
     print("🚀 در حال اجرا ...")
     with client:
         client.loop.run_until_complete(main())
-
-
-
-
-
-
-
-
-
-
-
-
-
