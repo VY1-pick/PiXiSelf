@@ -167,7 +167,7 @@ def make_calendar_image_gregorian(year, month, out_path="calendar.png"):
     for i in range(7):
         table[(0, i)].set_facecolor("#dbeafe")  # آبی روشن
         table[(0, i)].set_fontsize(12)
-        table[(0, i)].set_fontweight("bold")
+        table[(0, i)].set_text_props(fontweight="bold", color="black")
 
     plt.savefig(out_path, bbox_inches="tight", dpi=200)
     plt.close()
@@ -261,6 +261,7 @@ if __name__ == "__main__":
     print("🚀 در حال اجرا ...")
     with client:
         client.loop.run_until_complete(main())
+
 
 
 
