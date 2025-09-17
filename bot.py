@@ -86,9 +86,9 @@ async def getTime(event):
     weekday_fa = days_fa[weekday]
 
     await event.reply(
-        f"⏰ ساعت الان به وقت ایران: **{now}**\n"
-        f"📅 امروز **{weekday_fa}** هست\n"
-        f"📌 تاریخ: **{date}**", parse_mode = "markdown"
+        f"⏰ ساعت به وقت ایران: `{now}`\n"
+        f"📅 امروز `{weekday_fa}` هست\n"
+        f"📌 تاریخ: `{date}`", parse_mode = "markdown"
     )
 
 # فعال/غیرفعال کردن ساعت با دستور "ساعت پروفایل"
@@ -127,6 +127,7 @@ if __name__ == "__main__":
     print("🚀 در حال اجرا ...")
     with client:
         client.loop.run_until_complete(main())
+
 
 
 
