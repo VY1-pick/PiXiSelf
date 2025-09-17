@@ -1,2 +1,5 @@
 telethon
 pytz
+jdatetime
+hijri-converter
+matplotlib
