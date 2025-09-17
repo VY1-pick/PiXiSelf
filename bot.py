@@ -44,7 +44,8 @@ async def clock_updater():
 # هندلر تستی
 @client.on(events.NewMessage(pattern="سلام"))
 async def handler(event):
-    await event.reply("سلام از PiXiSelf 👋")
+    if event.is_private:
+        await event.reply("سلام از PiXiSelf 👋")
 
 # فعال/غیرفعال کردن ساعت با دستور "ساعت"
 @client.on(events.NewMessage(pattern="ساعت"))
@@ -76,6 +77,7 @@ if __name__ == "__main__":
     print("🚀 در حال اجرا ...")
     with client:
         client.loop.run_until_complete(main())
+
 
 
 
