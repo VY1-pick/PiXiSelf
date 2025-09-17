@@ -193,6 +193,23 @@ async def send_calendar(event):
     # ارسال عکس با کپشن
     await client.reply("calendar.png", caption=caption)
 
+def get_holidays(days=7):
+    today = jdatetime.date.today()
+    holidays = []
+
+    for i in range(days):
+        d = today + jdatetime.timedelta(days=i)
+        url = f"{HOLIDAY_API}{d.year}/{d.month}/{d.day}"
+        try:
+            res = requests.get(url).json()
+            if "events" in res and res["events"]:
+                holidays.append(f"{d.strftime('%Y/%m/%d')} → {', '.join(res['events'])}")
+        except Exception:
+            continue
+
+    return holidays if holidays else ["هیچ تعطیلی یا مناسبتی در این بازه نیست."]
+
+
 async def main():
     me = await client.get_me()
     print(f"✅ لاگین شدی به عنوان: {getattr(me, 'username', me.id)}")
@@ -210,6 +227,7 @@ if __name__ == "__main__":
     print("🚀 در حال اجرا ...")
     with client:
         client.loop.run_until_complete(main())
+
 
 
 
