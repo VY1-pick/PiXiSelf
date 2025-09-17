@@ -123,7 +123,7 @@ def make_calendar_image(year, month):
     cal = calendar.monthcalendar(year, month)
     fig, ax = plt.subplots(figsize=(8, 6))
     ax.axis('off')
-    ax.set_title(f"📅 {year}/{month}", fontsize=18, fontweight="bold")
+    ax.set_title(f" {year}/{month}", fontsize=18, fontweight="bold")
 
     table = ax.table(
         cellText=cal,
@@ -196,4 +196,5 @@ if __name__ == "__main__":
     print("🚀 در حال اجرا ...")
     with client:
         client.loop.run_until_complete(main())
+
 
