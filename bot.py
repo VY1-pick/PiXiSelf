@@ -24,7 +24,7 @@ days_fa = {
     }
 
 # تنظیمات فونت فارسی برای matplotlib
-matplotlib.rcParams['font.family'] = 'DejaVu Sans'
+matplotlib.rcParams['font.family'] = 'Noto Sans'
 
 # گرفتن API_ID و API_HASH از Environment Variables
 API_ID = int(os.environ.get("API_ID", "0"))
@@ -191,7 +191,7 @@ async def send_calendar(event):
     )
 
     # ارسال عکس با کپشن
-    await client.reply("calendar.png", caption=caption)
+    await event.reply("calendar.png", caption=caption)
 
 def get_holidays(days=7):
     today = jdatetime.date.today()
@@ -227,6 +227,7 @@ if __name__ == "__main__":
     print("🚀 در حال اجرا ...")
     with client:
         client.loop.run_until_complete(main())
+
 
 
 
