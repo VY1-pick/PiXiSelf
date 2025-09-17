@@ -82,7 +82,7 @@ async def getTime(event):
 
     now = datetime.now(tehran_tz).strftime("%H:%M")
     weekday = datetime.now(tehran_tz).strftime("%A")
-    date = now.strftime("%Y/%m/%d")
+    date = datetime.now(tehran_tz).strftime("%Y/%m/%d")
     weekday_fa = days_fa[weekday]
 
     await event.reply(
@@ -127,6 +127,7 @@ if __name__ == "__main__":
     print("🚀 در حال اجرا ...")
     with client:
         client.loop.run_until_complete(main())
+
 
 
 
