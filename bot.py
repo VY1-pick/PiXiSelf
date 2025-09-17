@@ -120,19 +120,46 @@ async def toggle_clock(event):
 
 
 def make_calendar_image(year, month):
-    cal = calendar.monthcalendar(year, month)
-    fig, ax = plt.subplots(figsize=(8, 6))
-    ax.axis('off')
-    ax.set_title(f" {year}/{month}", fontsize=18, fontweight="bold")
+    # نام ماه‌های فارسی
+    persian_months = [
+        "فروردین", "اردیبهشت", "خرداد", "تیر", "مرداد", "شهریور",
+        "مهر", "آبان", "آذر", "دی", "بهمن", "اسفند"
+    ]
+    
+    # نام روزهای هفته به فارسی
+    week_days = ["شنبه","یکشنبه","دوشنبه","سه‌شنبه","چهارشنبه","پنجشنبه","جمعه"]
 
+    # ساخت تقویم شمسی
+    cal = jdatetime.JalaliCalendar().monthdayscalendar(year, month)
+
+    fig, ax = plt.subplots(figsize=(9, 6))
+    ax.set_facecolor("#f0f8ff")  # بکگراند ملایم آبی
+    ax.axis('off')
+
+    # عنوان با ماه فارسی
+    ax.set_title(f"{persian_months[month-1]} {year}", fontsize=20, fontweight="bold", color="#2c3e50")
+
+    # ساخت جدول
     table = ax.table(
         cellText=cal,
-        colLabels=["د", "س", "چ", "پ", "ج", "ش", "ی"],
+        colLabels=week_days,
         loc='center',
         cellLoc='center'
     )
-    table.scale(1, 2)
-    plt.savefig("calendar.png")
+
+    # استایل جدول
+    table.scale(1.2, 1.8)
+    for key, cell in table.get_celld().items():
+        cell.set_linewidth(0.5)
+        cell.set_edgecolor("#34495e")
+        cell.set_facecolor("#ecf0f1")
+        cell.set_fontsize(12)
+
+    # رنگ جمعه‌ها (ستون آخر)
+    for row in range(len(cal)+1):  # +1 چون header هم داریم
+        table[(row, 6)].set_facecolor("#ffcccc")
+
+    plt.savefig("calendar.png", bbox_inches="tight")
     plt.close()
 
 def get_holidays(days=7):
@@ -196,5 +223,6 @@ if __name__ == "__main__":
     print("🚀 در حال اجرا ...")
     with client:
         client.loop.run_until_complete(main())
+
 
 
