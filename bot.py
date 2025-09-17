@@ -119,55 +119,14 @@ async def toggle_clock(event):
         clock_enabled = True
         await event.reply("⏰ ساعت فعال شد")
 
-def make_calendar_image_gregorian(year, month, out_path="calendar.png"):
-    tz = ZoneInfo("Asia/Tehran")
-    now = datetime.now(tz)
-
-    cal = calendar.monthcalendar(year, month)
-
-    fig, ax = plt.subplots(figsize=(10, 7))
-    ax.set_facecolor("#f0f8ff")  # بک‌گراند ملایم
+def make_holidays_image(holidays, out_path="calendar.png"):
+    fig, ax = plt.subplots(figsize=(8, 10))
     ax.axis('off')
+    ax.set_title("📌 مناسبت‌های ۱۰ روز آینده", fontsize=16, fontweight="bold")
 
-    # عنوان ماه/سال
-    month_name = calendar.month_name[month]
-    ax.set_title(
-        f"{month_name} {year}",
-        fontsize=20,
-        fontweight="bold",
-        color="#333333",
-        pad=20
-    )
-
-    # ساخت جدول
-    table = ax.table(
-        cellText=cal,
-        colLabels=["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"],
-        loc='center',
-        cellLoc='center'
-    )
-    table.scale(1.2, 1.5)
-
-    # استایل جدول
-    for key, cell in table.get_celld().items():
-        cell.set_edgecolor("#999999")
-        cell.set_linewidth(0.5)
-        cell.set_fontsize(12)
-
-        # رنگ جمعه (ستون آخر)
-        if key[0] > 0 and key[1] == 6:
-            cell.set_facecolor("#ffe6e6")  # قرمز ملایم
-
-        # رنگ امروز
-        if key[0] > 0 and cal[key[0]-1][key[1]] == now.day and month == now.month and year == now.year:
-            cell.set_facecolor("#c6f6c6")  # سبز ملایم
-            cell.set_text_props(fontweight="bold", color="black")
-
-    # استایل هدر ستون‌ها
-    for i in range(7):
-        table[(0, i)].set_facecolor("#dbeafe")  # آبی روشن
-        table[(0, i)].set_fontsize(12)
-        table[(0, i)].set_text_props(fontweight="bold", color="black")
+    # نمایش مناسبت‌ها خط به خط
+    text = "\n".join([f"{i+1}. {h}" for i, h in enumerate(holidays)])
+    ax.text(0.05, 0.95, text, fontsize=12, va="top", ha="left", wrap=True)
 
     plt.savefig(out_path, bbox_inches="tight", dpi=200)
     plt.close()
@@ -199,50 +158,40 @@ def get_holidays_next_days(days=7):
     return results
 
 # هندلر برای تاریخ/تقویم
-@client.on(events.NewMessage(pattern=r"^(تاریخ|تقویم)$"))
+@client.on(events.NewMessage(pattern="^(تاریخ|تقویم)$"))
 async def send_calendar(event):
-    # فقط وقتی خودت فرستادی اجرا کن
     if not event.out:
         return
 
-    tz = ZoneInfo("Asia/Tehran")
-    now = datetime.now(tz)
-    # تاریخ شمسی امروز
-    jtoday = jdatetime.date.fromgregorian(date=now)
-    jalali_str = jtoday.strftime("%Y/%m/%d")        # عددی شمسی
-    gregorian_str = now.strftime("%Y/%m/%d")        # عددی میلادی
-    weekday_fa = days_fa.get(now.strftime("%A"), now.strftime("%A"))
+    # تاریخ امروز
+    today_jalali = jdatetime.date.today()
+    today_gregorian = datetime.today().date()
+    today_hijri = "25 ربیع الاول 1447"  # فعلا ثابت، بعداً میشه از API بیاری
 
-    # مناسبت‌ها/تعطیلات 7 روز آینده
-    items = get_holidays_next_days(7)
-    lines = []
-    for jd, gd, is_hol, evs in items:
-        day_label = f"{jd.strftime('%Y/%m/%d')} (معادل {gd.strftime('%Y/%m/%d')})"
-        status = "🔴 تعطیل" if is_hol else "—"
-        if evs:
-            lines.append(f"• {day_label}: {status} — {'; '.join(evs)}")
-        else:
-            lines.append(f"• {day_label}: {status}")
+    # محاسبه روزهای سپری‌شده و باقی‌مانده
+    days_passed = today_gregorian.timetuple().tm_yday
+    total_days = 366 if calendar.isleap(today_gregorian.year) else 365
+    days_left = total_days - days_passed
+    percent = (days_passed / total_days) * 100
 
-    if not lines:
-        lines_text = "هیچ مناسبت یا تعطیلی در ۷ روز آینده ثبت نشده."
-    else:
-        lines_text = "\n".join(lines)
+    # گرفتن مناسبت‌ها (۱۰ روز آینده)
+    holidays = get_holidays(10)
 
-    # ساخت عکس تقویم میلادی (ماه جاری) — همین که قبلاً می‌پسندیدی
-    make_calendar_image_gregorian(now.year, now.month, out_path="calendar.png")
+    # ساخت عکس شامل مناسبت‌ها
+    make_holidays_image(holidays, out_path="calendar.png")
 
-    # کپشن فارسی (این رو توی کپشن عکس می‌فرستیم)
+    # کپشن کوتاه
     caption = (
-        f"📌 امروز (شمسی): {jalali_str} — {weekday_fa}\n"
-        f"📌 معادل میلادی: {gregorian_str}\n\n"
-        f"📅 مناسبت‌ها و تعطیلات ۷ روز آینده:\n{lines_text}"
+        f"⏰ ساعت: {datetime.now().strftime('%H:%M')}\n"
+        f"📅 تاریخ شمسی: {today_jalali.strftime('%A %d %B %Y')}\n"
+        f"📅 تاریخ قمری: {today_hijri}\n"
+        f"📅 تاریخ میلادی: {today_gregorian.strftime('%A %d %B %Y')}\n\n"
+        f"📊 روزهای سپری شده: {days_passed} ({percent:.2f}%)\n"
+        f"📊 روزهای باقی‌مانده: {days_left} ({100 - percent:.2f}%)"
     )
 
-    # ارسال به Saved Messages (یا می‌تونی event.reply کنی)
-    await client.send_file("me", "calendar.png", caption=caption)
-
-
+    # ارسال عکس با کپشن
+    await client.reply("calendar.png", caption=caption)
 
 async def main():
     me = await client.get_me()
@@ -261,6 +210,7 @@ if __name__ == "__main__":
     print("🚀 در حال اجرا ...")
     with client:
         client.loop.run_until_complete(main())
+
 
 
 
