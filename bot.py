@@ -52,6 +52,16 @@ async def handler(event):
     
     await event.reply("سلام و درود 👋")
 
+@client.on(events.NewMessage(pattern="پینگ"))
+async def getping(event):
+    if event.out:
+        start = time.time()
+        msg = await event.reply("🏓 پینگ...")
+        end = time.time()
+
+        latency = int((end - start) * 1000)
+        await msg.edit(f"🏓 پینگ: {latency} ms\n✅ سرور فعاله")
+
 # فعال/غیرفعال کردن ساعت با دستور "ساعت"
 @client.on(events.NewMessage(pattern="ساعت"))
 async def toggle_clock(event):
@@ -84,6 +94,7 @@ if __name__ == "__main__":
     print("🚀 در حال اجرا ...")
     with client:
         client.loop.run_until_complete(main())
+
 
 
 
