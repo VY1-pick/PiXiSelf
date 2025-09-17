@@ -119,23 +119,56 @@ async def toggle_clock(event):
         await event.reply("⏰ ساعت فعال شد")
 
 def make_calendar_image_gregorian(year, month, out_path="calendar.png"):
-    cal = calendar.monthcalendar(year, month)
-    fig, ax = plt.subplots(figsize=(9, 6))
-    ax.axis('off')
-    ax.set_title(f"{calendar.month_name[month]} {year}", fontsize=16)
+    tz = ZoneInfo("Asia/Tehran")
+    now = datetime.now(tz)
 
+    cal = calendar.monthcalendar(year, month)
+
+    fig, ax = plt.subplots(figsize=(10, 7))
+    ax.set_facecolor("#f0f8ff")  # بک‌گراند ملایم
+    ax.axis('off')
+
+    # عنوان ماه/سال
+    month_name = calendar.month_name[month]
+    ax.set_title(
+        f"{month_name} {year}",
+        fontsize=20,
+        fontweight="bold",
+        color="#333333",
+        pad=20
+    )
+
+    # ساخت جدول
     table = ax.table(
         cellText=cal,
-        colLabels=["Mo","Tu","We","Th","Fr","Sa","Su"],
+        colLabels=["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"],
         loc='center',
         cellLoc='center'
     )
-    table.scale(1, 2)
-    # کمی استایل برای خواناتر شدن
+    table.scale(1.2, 1.5)
+
+    # استایل جدول
     for key, cell in table.get_celld().items():
-        cell.set_edgecolor("gray")
+        cell.set_edgecolor("#999999")
         cell.set_linewidth(0.5)
-    plt.savefig(out_path, bbox_inches="tight")
+        cell.set_fontsize(12)
+
+        # رنگ جمعه (ستون آخر)
+        if key[0] > 0 and key[1] == 6:
+            cell.set_facecolor("#ffe6e6")  # قرمز ملایم
+
+        # رنگ امروز
+        if key[0] > 0 and cal[key[0]-1][key[1]] == now.day and month == now.month and year == now.year:
+            cell.set_facecolor("#c6f6c6")  # سبز ملایم
+            cell.set_text_props(fontweight="bold", color="black")
+
+    # استایل هدر ستون‌ها
+    for i in range(7):
+        table[(0, i)].set_facecolor("#dbeafe")  # آبی روشن
+        table[(0, i)].set_fontsize(12)
+        table[(0, i)].set_fontweight("bold")
+
+    plt.savefig(out_path, bbox_inches="tight", dpi=200)
     plt.close()
 
 def get_holidays_next_days(days=7):
@@ -227,6 +260,7 @@ if __name__ == "__main__":
     print("🚀 در حال اجرا ...")
     with client:
         client.loop.run_until_complete(main())
+
 
 
 
