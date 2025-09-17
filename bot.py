@@ -119,6 +119,18 @@ async def toggle_clock(event):
         await event.reply("⏰ ساعت فعال شد")
 
 
+def get_days_in_month(year, month):
+    """تعداد روزهای یک ماه شمسی رو برمی‌گردونه"""
+    # ۳۱ روزه‌ها
+    if month <= 6:
+        return 31
+    # ۳۰ روزه‌ها
+    if month <= 11:
+        return 30
+    # اسفند → بستگی به کبیسه بودن داره
+    return 30 if jdatetime.JalaliDate.isleap(year) else 29
+
+
 def make_calendar_image(year, month):
     # نام ماه‌های فارسی
     persian_months = [
@@ -129,15 +141,12 @@ def make_calendar_image(year, month):
     # نام روزهای هفته به فارسی
     week_days = ["شنبه","یکشنبه","دوشنبه","سه‌شنبه","چهارشنبه","پنجشنبه","جمعه"]
 
-    # پیدا کردن روز اول ماه (0=دوشنبه ... 6=یکشنبه توی jdatetime → تبدیلش می‌کنیم)
+    # پیدا کردن روز اول ماه (شنبه=0)
     first_day = jdatetime.date(year, month, 1).togregorian().weekday()
-    # تبدیل weekday میلادی به شنبه=0 ... جمعه=6
     start_day = (first_day + 1) % 7  
 
     # تعداد روزهای ماه
-    days_in_month = jdatetime.JalaliMonthDays[month-1]
-    if month == 12 and not jdatetime.JalaliDate.isleap(year):
-        days_in_month = 29
+    days_in_month = get_days_in_month(year, month)
 
     # ساخت جدول روزها
     cal = []
@@ -250,6 +259,7 @@ if __name__ == "__main__":
     print("🚀 در حال اجرا ...")
     with client:
         client.loop.run_until_complete(main())
+
 
 
 
