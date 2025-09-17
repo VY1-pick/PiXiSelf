@@ -6,6 +6,7 @@ import jdatetime
 import calendar
 import matplotlib.pyplot as plt
 import matplotlib
+from zoneinfo import ZoneInfo
 import pytz
 import sys
 from telethon import TelegramClient, events
@@ -260,6 +261,7 @@ if __name__ == "__main__":
     print("🚀 در حال اجرا ...")
     with client:
         client.loop.run_until_complete(main())
+
 
 
 
