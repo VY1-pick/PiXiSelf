@@ -2,3 +2,4 @@ telethon
 requests
 jdatetime
 matplotlib
+pytz
