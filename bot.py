@@ -65,8 +65,34 @@ async def getping(event):
     latency = int((end - start) * 1000)
     await msg.edit(f"🏓 پینگ: {latency} ms\n✅ سرور فعاله")
 
-# فعال/غیرفعال کردن ساعت با دستور "ساعت"
-@client.on(events.NewMessage(pattern="ساعت"))
+@client.on(events.NewMessage(pattern="^(ساعت|امروز|تاریخ)$"))
+async def getTime(event):
+    if not event.out:
+        return
+    
+    days_fa = {
+    "Saturday": "شنبه",
+    "Sunday": "یک‌شنبه",
+    "Monday": "دوشنبه",
+    "Tuesday": "سه‌شنبه",
+    "Wednesday": "چهارشنبه",
+    "Thursday": "پنج‌شنبه",
+    "Friday": "جمعه",
+    }
+
+    now = datetime.now(tehran_tz).strftime("%H:%M")
+    weekday = datetime.now(tehran_tz).strftime("%A")
+    date = now.strftime("%Y/%m/%d")
+    weekday_fa = days_fa[weekday]
+
+    await event.reply(
+        f"⏰ ساعت الان به وقت ایران: **{now}**\n"
+        f"📅 امروز **{weekday_fa}** هست\n"
+        f"📌 تاریخ: **{date}**", parse_mode = "markdown"
+    )
+
+# فعال/غیرفعال کردن ساعت با دستور "ساعت پروفایل"
+@client.on(events.NewMessage(pattern="ساعت پروفایل"))
 async def toggle_clock(event):
     global clock_enabled
     
@@ -101,6 +127,7 @@ if __name__ == "__main__":
     print("🚀 در حال اجرا ...")
     with client:
         client.loop.run_until_complete(main())
+
 
 
 
