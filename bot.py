@@ -129,14 +129,41 @@ def make_calendar_image(year, month):
     # نام روزهای هفته به فارسی
     week_days = ["شنبه","یکشنبه","دوشنبه","سه‌شنبه","چهارشنبه","پنجشنبه","جمعه"]
 
-    # ساخت تقویم شمسی
-    cal = jdatetime.JalaliCalendar().monthdayscalendar(year, month)
+    # پیدا کردن روز اول ماه (0=دوشنبه ... 6=یکشنبه توی jdatetime → تبدیلش می‌کنیم)
+    first_day = jdatetime.date(year, month, 1).togregorian().weekday()
+    # تبدیل weekday میلادی به شنبه=0 ... جمعه=6
+    start_day = (first_day + 1) % 7  
 
+    # تعداد روزهای ماه
+    days_in_month = jdatetime.JalaliMonthDays[month-1]
+    if month == 12 and not jdatetime.JalaliDate.isleap(year):
+        days_in_month = 29
+
+    # ساخت جدول روزها
+    cal = []
+    week = [""] * 7
+    day = 1
+    for i in range(start_day, 7):
+        week[i] = str(day)
+        day += 1
+    cal.append(week)
+
+    while day <= days_in_month:
+        week = []
+        for i in range(7):
+            if day <= days_in_month:
+                week.append(str(day))
+                day += 1
+            else:
+                week.append("")
+        cal.append(week)
+
+    # ساخت تصویر با matplotlib
     fig, ax = plt.subplots(figsize=(9, 6))
     ax.set_facecolor("#f0f8ff")  # بکگراند ملایم آبی
     ax.axis('off')
 
-    # عنوان با ماه فارسی
+    # عنوان
     ax.set_title(f"{persian_months[month-1]} {year}", fontsize=20, fontweight="bold", color="#2c3e50")
 
     # ساخت جدول
@@ -223,6 +250,7 @@ if __name__ == "__main__":
     print("🚀 در حال اجرا ...")
     with client:
         client.loop.run_until_complete(main())
+
 
 
 
