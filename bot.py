@@ -1,23 +1,22 @@
 from telethon.tl.functions.account import UpdateProfileRequest
 import os
-from datetime import datetime, timedelta
+import sys
+import time
+import asyncio
 import requests
 import jdatetime
 import calendar
 import matplotlib.pyplot as plt
 import matplotlib
 import matplotlib.font_manager as fm
-from zoneinfo import ZoneInfo
 import pytz
-import sys
+from datetime import datetime
 from telethon import TelegramClient, events
-import time
-import asyncio
 
 # ============================
 # تنظیم فونت فارسی برای matplotlib
 # ============================
-FONT_URL = "https://github.com/googlefonts/noto-fonts/blob/main/hinted/ttf/NotoSansArabic/NotoSansArabic-Regular.ttf?raw=true"
+FONT_URL = "https://github.com/googlefonts/noto-fonts/raw/main/hinted/ttf/NotoSansArabic/NotoSansArabic-Regular.ttf"
 FONT_PATH = "NotoSansArabic-Regular.ttf"
 
 if not os.path.exists(FONT_PATH):
@@ -47,13 +46,13 @@ tehran_tz = pytz.timezone("Asia/Tehran")
 SESSION_NAME = "pixiself_session"
 
 if not os.path.exists(f"{SESSION_NAME}.session"):
-    print("❌ فایل session پیدا نشد. لطفاً اول روی کامپیوتر یا Colab لاگین کن "
-          "و فایل pixiself_session.session رو توی ریپو بذار.")
+    print("❌ فایل session پیدا نشد. لطفاً اول روی سیستم لاگین کن "
+          "و فایل pixiself_session.session رو توی پروژه بذار.")
     sys.exit(1)
 
 client = TelegramClient(SESSION_NAME, API_ID, API_HASH)
 
-clock_enabled = False  # وضعیت ساعت
+clock_enabled = False  # وضعیت ساعت پروفایل
 
 # ============================
 # آپدیت‌کننده ساعت پروفایل
@@ -127,7 +126,7 @@ def make_holidays_image(holidays, out_path="calendar.png"):
     ax.set_title("📌 مناسبت‌های ۱۰ روز آینده", fontsize=16, fontweight="bold")
 
     text = "\n".join([f"{i+1}. {h}" for i, h in enumerate(holidays)])
-    ax.text(0.05, 0.95, text, fontsize=12, va="top", ha="left", wrap=True)
+    ax.text(0.05, 0.95, text, fontsize=12, va="top", ha="left", wrap=True, fontproperties=prop)
 
     plt.savefig(out_path, bbox_inches="tight", dpi=200)
     plt.close()
@@ -164,7 +163,7 @@ async def send_calendar(event):
     make_holidays_image(holidays, out_path="calendar.png")
 
     caption = (
-        f"⏰ ساعت: {datetime.now().strftime('%H:%M')}\n"
+        f"⏰ ساعت: {datetime.now(tehran_tz).strftime('%H:%M')}\n"
         f"📅 تاریخ شمسی: {today_jalali.strftime('%A %d %B %Y')}\n"
         f"📅 تاریخ قمری: {today_hijri}\n"
         f"📅 تاریخ میلادی: {today_gregorian.strftime('%A %d %B %Y')}\n\n"
