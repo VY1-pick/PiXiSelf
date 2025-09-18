@@ -220,9 +220,9 @@ async def send_calendar(event):
     today_gregorian = datetime.today().date()
 
     # نام روز هفته فارسی
-    weekday_fa = today_jalali.strftime("%A")  
+    weekday = today_jalali.strftime("%A")
     # تاریخ کامل مثل "27 شهریور 1404"
-    date_fa = today_jalali.strftime("%d %B %Y")  
+    date_fa = today_jalali.strftime("%d %B %Y")
 
     # تاریخ قمری (فعلا ثابت یا بعداً از API بگیریم)
     today_hijri = "الخميس - ۲۶ ربيع الأول ۱۴۴۷"
@@ -239,7 +239,7 @@ async def send_calendar(event):
     caption = (
         "◄ ساعت و تاریخ :   \n\n"
         f"• ساعت : {datetime.now(tehran_tz).strftime('%H:%M')}\n"
-        f"• تاریخ امروز : {weekday_fa} - {date_fa}\n\n"
+        f"• تاریخ امروز : {days_fa} - {date_fa}\n\n"
         f"• تاریخ قمری : {today_hijri}\n"
         f"• تاریخ میلادی : {date_en}\n\n"
         f"• روز های سپری شده : {days_passed} روز ( {percent:.1f} درصد )\n"
@@ -281,6 +281,7 @@ if __name__ == "__main__":
     print("🚀 در حال اجرا ...")
     with client:
         client.loop.run_until_complete(main())
+
 
 
 
