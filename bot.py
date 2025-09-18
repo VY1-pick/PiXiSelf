@@ -112,8 +112,10 @@ def fetch_screenshot_from_api(selector=DEFAULT_CALENDAR_SELECTOR, out_path=None)
         "file_type": "png",
         "selector": selector,
         "device": "desktop",
-        "viewport": "1920x1080",
+        "width": "1920",
+        "height": "1080",
         "wait_for_event": "load",
+        "delay": 3000   # یعنی ۳ ثانیه صبر کنه بعد اسکرین‌شات
         # اگر بخوای می‌تونی پارامترهای دیگری مثل quality یا force etc اضافه کنی
     }
 
@@ -307,3 +309,4 @@ if __name__ == "__main__":
     print("🚀 در حال اجرا ...")
     with client:
         client.loop.run_until_complete(main())
+
