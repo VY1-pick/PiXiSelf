@@ -14,6 +14,7 @@ from datetime import datetime
 # ============================
 # تنظیمات و متغیرها
 # ============================
+# روزهای هفته فارسی
 days_fa = {
     "Saturday": "شنبه",
     "Sunday": "یک‌شنبه",
@@ -22,6 +23,22 @@ days_fa = {
     "Wednesday": "چهارشنبه",
     "Thursday": "پنج‌شنبه",
     "Friday": "جمعه",
+}
+
+# ماه‌های فارسی
+months_fa = {
+    1: "فروردین",
+    2: "اردیبهشت",
+    3: "خرداد",
+    4: "تیر",
+    5: "مرداد",
+    6: "شهریور",
+    7: "مهر",
+    8: "آبان",
+    9: "آذر",
+    10: "دی",
+    11: "بهمن",
+    12: "اسفند",
 }
 
 API_ID = int(os.environ.get("API_ID", "0"))
@@ -219,18 +236,18 @@ async def send_calendar(event):
     today_jalali = jdatetime.date.today()
     today_gregorian = datetime.today().date()
 
-    # نام روز هفته فارسی
-    weekday = today_jalali.strftime("%A")
+    # روز هفته فارسی
+    weekday_fa = days_fa[today_gregorian.strftime("%A")]
     # تاریخ کامل مثل "27 شهریور 1404"
-    date_fa = today_jalali.strftime("%d %B %Y")
+    date_fa = f"{today_jalali.day} {months_fa[today_jalali.month]} {today_jalali.year}"
 
-    # تاریخ قمری (فعلا ثابت یا بعداً از API بگیریم)
+    # تاریخ قمری (فعلا دستی یا از API بعداً)
     today_hijri = "الخميس - ۲۶ ربيع الأول ۱۴۴۷"
 
-    # تاریخ میلادی با فرمت خواسته‌شده
+    # تاریخ میلادی
     date_en = today_gregorian.strftime("%A - %Y %d %B")
 
-    # محاسبه روزهای سپری‌شده و مانده
+    # محاسبه روزهای سپری‌شده
     days_passed = today_gregorian.timetuple().tm_yday
     total_days = 366 if calendar.isleap(today_gregorian.year) else 365
     days_left = total_days - days_passed
@@ -239,11 +256,11 @@ async def send_calendar(event):
     caption = (
         "◄ ساعت و تاریخ :   \n\n"
         f"• ساعت : {datetime.now(tehran_tz).strftime('%H:%M')}\n"
-        f"• تاریخ امروز : {days_fa} - {date_fa}\n\n"
+        f"• تاریخ امروز : {weekday_fa} - {date_fa}\n\n"
         f"• تاریخ قمری : {today_hijri}\n"
         f"• تاریخ میلادی : {date_en}\n\n"
-        f"• روز های سپری شده : {days_passed} روز ( {percent:.1f} درصد )\n"
-        f"• روز های باقی مانده : {days_left} روز ( {100 - percent:.1f} درصد )"
+        f"• روز های سپری شده : {days_passed} روز ( {percent:.2f} درصد )\n"
+        f"• روز های باقی مانده : {days_left} روز ( {100 - percent:.2f} درصد )"
     )
 
     img = get_or_create_calendar_image()
@@ -281,6 +298,7 @@ if __name__ == "__main__":
     print("🚀 در حال اجرا ...")
     with client:
         client.loop.run_until_complete(main())
+
 
 
 
