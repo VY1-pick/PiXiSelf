@@ -91,7 +91,7 @@ def get_cached_if_current():
 # گرفتن اسکرین‌شات از screenshotapi.net
 # (synchronous — چون با requests است؛ در async از asyncio.to_thread فراخوانی کن)
 # ============================
-def fetch_screenshot_from_api():
+def fetch_screenshot_from_api(selector=None):
     endpoint = "https://shot.screenshotapi.net/screenshot"
     params = {
         "token": SCREENSHOT_API_KEY,
@@ -101,8 +101,11 @@ def fetch_screenshot_from_api():
         "device": "desktop",
         "viewport": "1920x1080",
         "wait_for_event": "load",
-        "delay": 5000  # ۵ ثانیه صبر
+        "delay": 5000
     }
+
+    if selector:
+        params["selector"] = selector  # فقط اگر بخوای بخش خاصی رو بگیره
 
     try:
         r = requests.get(endpoint, params=params, timeout=60)
@@ -116,6 +119,7 @@ def fetch_screenshot_from_api():
     except Exception as e:
         print("❌ خطا در تماس با Screenshot API:", e)
         return None
+
 def get_or_create_calendar_image():
     """
     اگر کش موجود است آن را برگردان؛ وگرنه عکس جدید بگیر، ذخیره کن و برگردان.
@@ -266,5 +270,6 @@ if __name__ == "__main__":
     print("🚀 در حال اجرا ...")
     with client:
         client.loop.run_until_complete(main())
+
 
 
