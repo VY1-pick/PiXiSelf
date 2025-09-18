@@ -35,7 +35,7 @@ SCREENSHOT_ENDPOINT = "https://shot.screenshotapi.net/screenshot"
 # selector برای بخش مناسبت‌های time.ir — اگر می‌خواهی عوض کنی ENV بذار
 DEFAULT_CALENDAR_SELECTOR = os.environ.get(
     "CALENDAR_SELECTOR",
-    ".EventList_root__Ub1m_.EventCalendar_root__eventList__chdpK"
+    "EventList_root__Ub1m_ EventCalendar_root__eventList__chdpK"
 )
 
 # فایل cache metadata
@@ -91,74 +91,31 @@ def get_cached_if_current():
 # گرفتن اسکرین‌شات از screenshotapi.net
 # (synchronous — چون با requests است؛ در async از asyncio.to_thread فراخوانی کن)
 # ============================
-def fetch_screenshot_from_api(selector=DEFAULT_CALENDAR_SELECTOR, out_path=None):
-    """
-    درخواست به screenshotapi می‌فرستد و عکس را ذخیره می‌کند.
-    برمی‌گرداند مسیر فایل یا None در صورت خطا.
-    """
-    if not SCREENSHOT_API_KEY:
-        print("⚠️ SCREENSHOT_API_KEY تنظیم نشده.")
-        return None
-
-    # مسیر خروجی بر اساس تاریخ شمسی
-    jtoday = jdatetime.date.today()
-    if not out_path:
-        out_path = cached_filename_for(jtoday.year, jtoday.month)
-
+def fetch_screenshot_from_api():
+    endpoint = "https://shot.screenshotapi.net/screenshot"
     params = {
         "token": SCREENSHOT_API_KEY,
         "url": "https://www.time.ir/",
         "output": "image",
         "file_type": "png",
-        "selector": selector,
         "device": "desktop",
-        "width": "1920",
-        "height": "1080",
+        "viewport": "1920x1080",
         "wait_for_event": "load",
-        "delay": 3000   # یعنی ۳ ثانیه صبر کنه بعد اسکرین‌شات
-        # اگر بخوای می‌تونی پارامترهای دیگری مثل quality یا force etc اضافه کنی
+        "delay": 5000  # ۵ ثانیه صبر
     }
 
     try:
-        r = requests.get(SCREENSHOT_ENDPOINT, params=params, timeout=30, stream=True)
+        r = requests.get(endpoint, params=params, timeout=60)
+        if r.status_code == 200:
+            with open("calendar.png", "wb") as f:
+                f.write(r.content)
+            return "calendar.png"
+        else:
+            print("❌ Screenshot API error:", r.text)
+            return None
     except Exception as e:
         print("❌ خطا در تماس با Screenshot API:", e)
         return None
-
-    # اگر پاسخ JSON با خطا بود، چاپ کن
-    content_type = r.headers.get("Content-Type", "")
-    if r.status_code != 200 or not content_type.startswith("image"):
-        # ممکنه API پیام خطا در JSON بده
-        try:
-            print("❌ Screenshot API response:", r.status_code, r.text[:1000])
-        except Exception:
-            print("❌ Screenshot API returned non-image response")
-        return None
-
-    try:
-        with open(out_path, "wb") as f:
-            for chunk in r.iter_content(chunk_size=8192):
-                if chunk:
-                    f.write(chunk)
-    except Exception as e:
-        print("❌ خطا در نوشتن فایل عکس:", e)
-        return None
-
-    # ذخیره متا
-    meta = {
-        "jalali_year": jtoday.year,
-        "jalali_month": jtoday.month,
-        "file": out_path,
-        "fetched_at": datetime.now(tehran_tz).isoformat()
-    }
-    try:
-        write_cache_meta(meta)
-    except Exception:
-        pass
-
-    print(f"✅ Screenshot saved: {out_path}")
-    return out_path
-
 def get_or_create_calendar_image():
     """
     اگر کش موجود است آن را برگردان؛ وگرنه عکس جدید بگیر، ذخیره کن و برگردان.
@@ -309,4 +266,5 @@ if __name__ == "__main__":
     print("🚀 در حال اجرا ...")
     with client:
         client.loop.run_until_complete(main())
+
 
