@@ -219,7 +219,7 @@ async def send_calendar(event):
     today_jalali = jdatetime.date.today()
     today_gregorian = datetime.today().date()
 
-    # TODO: از API تاریخ قمری بگیریم – فعلا دستی می‌ذاریم
+    # TODO: تاریخ قمری واقعی از API بگیر
     today_hijri = "الخميس - ۲۶ ربيع الأول ۱۴۴۷"
 
     days_passed = today_gregorian.timetuple().tm_yday
@@ -227,7 +227,6 @@ async def send_calendar(event):
     days_left = total_days - days_passed
     percent = (days_passed / total_days) * 100
 
-    # ساخت متن دقیق طبق خواسته شما
     caption = (
         "◄ ساعت و تاریخ :\n\n"
         f"• ساعت : {datetime.now(tehran_tz).strftime('%H:%M')}\n"
@@ -238,15 +237,16 @@ async def send_calendar(event):
         f"• روز های باقی مانده : {days_left} روز ( {100 - percent:.2f} درصد )"
     )
 
-    # گرفتن یا استفاده از عکس کش‌شده
-    img = get_or_create_calendar_image()
-
-    # ارسال متن و بعد عکس
+    # اول متن
     await event.reply(caption)
+
+    # بعد عکس (اگر موجود باشه)
+    img = get_or_create_calendar_image()
     if img:
         await event.reply(file=img)
     else:
         await event.reply("❌ نتونستم عکس تقویم رو بگیرم.")
+
 
 # ============================
 # پیش‌بارگیری (prefetch) هنگام استارت
@@ -276,6 +276,7 @@ if __name__ == "__main__":
     print("🚀 در حال اجرا ...")
     with client:
         client.loop.run_until_complete(main())
+
 
 
 
