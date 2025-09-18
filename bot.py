@@ -132,7 +132,7 @@ def get_or_create_calendar_image():
 
     # 2) اگر نبود، بگیر و برگردان
     selector = DEFAULT_CALENDAR_SELECTOR
-    fname = fetch_screenshot_from_api(selector=selector)
+    fname = fetch_screenshot_from_api()
     return fname
 
 # ============================
@@ -270,6 +270,7 @@ if __name__ == "__main__":
     print("🚀 در حال اجرا ...")
     with client:
         client.loop.run_until_complete(main())
+
 
 
 
