@@ -1,9 +1,5 @@
-telethon
-requests
-jdatetime
-matplotlib
-pytz
-arabic-reshaper
-python-bidi
-Pillow
-numpy
+telethon==1.36.0
+jdatetime==4.1.1
+matplotlib==3.9.2
+requests==2.32.3
+pytz==2024.2
