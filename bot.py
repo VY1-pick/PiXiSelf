@@ -1,4 +1,5 @@
 from telethon.tl.functions.account import UpdateProfileRequest
+from telethon import TelegramClient, events
 import os
 import sys
 import time
@@ -7,11 +8,11 @@ import requests
 import jdatetime
 import calendar
 import pytz
+import json
 from datetime import datetime
-from telethon import TelegramClient, events
 
 # ============================
-# داده‌ها و تنظیمات
+# تنظیمات و متغیرها
 # ============================
 days_fa = {
     "Saturday": "شنبه",
@@ -26,11 +27,22 @@ days_fa = {
 API_ID = int(os.environ.get("API_ID", "0"))
 API_HASH = os.environ.get("API_HASH", "")
 SESSION_NAME = "pixiself_session"
-tehran_tz = pytz.timezone("Asia/Tehran")
 
-# ScreenshotAPI تنظیمات
-SCREENSHOT_API_KEY = os.environ.get("SCREENSHOT_API_KEY", "DG10VT9-7YZ4R94-PH9Q0HG-4XGMYVC")
+# screenshotapi.net key (محیطی)
+SCREENSHOT_API_KEY = os.environ.get("SCREENSHOT_API_KEY", "")
 SCREENSHOT_ENDPOINT = "https://shot.screenshotapi.net/screenshot"
+
+# selector برای بخش مناسبت‌های time.ir — اگر می‌خواهی عوض کنی ENV بذار
+DEFAULT_CALENDAR_SELECTOR = os.environ.get(
+    "CALENDAR_SELECTOR",
+    ".EventList_root__Ub1m_.EventCalendar_root__eventList__chdpK"
+)
+
+# فایل cache metadata
+CACHE_META = "calendar_cache.json"
+
+# منطقه زمانی تهران
+tehran_tz = pytz.timezone("Asia/Tehran")
 
 if not os.path.exists(f"{SESSION_NAME}.session"):
     print("❌ فایل session پیدا نشد. لطفاً اول روی سیستم لاگین کن "
@@ -38,10 +50,130 @@ if not os.path.exists(f"{SESSION_NAME}.session"):
     sys.exit(1)
 
 client = TelegramClient(SESSION_NAME, API_ID, API_HASH)
+
 clock_enabled = False  # وضعیت ساعت پروفایل
 
 # ============================
-# آپدیت‌کننده ساعت پروفایل
+# کمکی‌های کش
+# ============================
+def read_cache_meta():
+    if not os.path.exists(CACHE_META):
+        return None
+    try:
+        with open(CACHE_META, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return None
+
+def write_cache_meta(meta: dict):
+    with open(CACHE_META, "w", encoding="utf-8") as f:
+        json.dump(meta, f, ensure_ascii=False)
+
+def cached_filename_for(j_year, j_month):
+    return f"calendar_{j_year}_{j_month}.png"
+
+def get_cached_if_current():
+    """اگر کش ماه جاری موجود و فایل وجود دارد، مسیر فایل را برگردان."""
+    meta = read_cache_meta()
+    now_j = jdatetime.date.today()
+    if not meta:
+        return None
+    try:
+        if meta.get("jalali_year") == now_j.year and meta.get("jalali_month") == now_j.month:
+            fname = meta.get("file")
+            if fname and os.path.exists(fname):
+                return fname
+    except Exception:
+        return None
+    return None
+
+# ============================
+# گرفتن اسکرین‌شات از screenshotapi.net
+# (synchronous — چون با requests است؛ در async از asyncio.to_thread فراخوانی کن)
+# ============================
+def fetch_screenshot_from_api(selector=DEFAULT_CALENDAR_SELECTOR, out_path=None):
+    """
+    درخواست به screenshotapi می‌فرستد و عکس را ذخیره می‌کند.
+    برمی‌گرداند مسیر فایل یا None در صورت خطا.
+    """
+    if not SCREENSHOT_API_KEY:
+        print("⚠️ SCREENSHOT_API_KEY تنظیم نشده.")
+        return None
+
+    # مسیر خروجی بر اساس تاریخ شمسی
+    jtoday = jdatetime.date.today()
+    if not out_path:
+        out_path = cached_filename_for(jtoday.year, jtoday.month)
+
+    params = {
+        "token": SCREENSHOT_API_KEY,
+        "url": "https://www.time.ir/",
+        "output": "image",
+        "file_type": "png",
+        "selector": selector,
+        "device": "desktop",
+        "viewport": "1920x1080",
+        "wait_for_event": "load",
+        # اگر بخوای می‌تونی پارامترهای دیگری مثل quality یا force etc اضافه کنی
+    }
+
+    try:
+        r = requests.get(SCREENSHOT_ENDPOINT, params=params, timeout=30, stream=True)
+    except Exception as e:
+        print("❌ خطا در تماس با Screenshot API:", e)
+        return None
+
+    # اگر پاسخ JSON با خطا بود، چاپ کن
+    content_type = r.headers.get("Content-Type", "")
+    if r.status_code != 200 or not content_type.startswith("image"):
+        # ممکنه API پیام خطا در JSON بده
+        try:
+            print("❌ Screenshot API response:", r.status_code, r.text[:1000])
+        except Exception:
+            print("❌ Screenshot API returned non-image response")
+        return None
+
+    try:
+        with open(out_path, "wb") as f:
+            for chunk in r.iter_content(chunk_size=8192):
+                if chunk:
+                    f.write(chunk)
+    except Exception as e:
+        print("❌ خطا در نوشتن فایل عکس:", e)
+        return None
+
+    # ذخیره متا
+    meta = {
+        "jalali_year": jtoday.year,
+        "jalali_month": jtoday.month,
+        "file": out_path,
+        "fetched_at": datetime.now(tehran_tz).isoformat()
+    }
+    try:
+        write_cache_meta(meta)
+    except Exception:
+        pass
+
+    print(f"✅ Screenshot saved: {out_path}")
+    return out_path
+
+def get_or_create_calendar_image():
+    """
+    اگر کش موجود است آن را برگردان؛ وگرنه عکس جدید بگیر، ذخیره کن و برگردان.
+    (این فانکشن را از async با asyncio.to_thread فراخوانی کن)
+    """
+    # 1) چک کش
+    cached = get_cached_if_current()
+    if cached:
+        return cached
+
+    # 2) اگر نبود، بگیر و برگردان
+    selector = DEFAULT_CALENDAR_SELECTOR
+    fname = fetch_screenshot_from_api(selector=selector)
+    return fname
+
+# ============================
+# آپدیت‌کننده ساعت پروفایل (همان قبلی)
 # ============================
 async def clock_updater():
     global clock_enabled
@@ -49,9 +181,7 @@ async def clock_updater():
         if clock_enabled:
             now = datetime.now(tehran_tz).strftime("%H:%M")
             try:
-                await client(UpdateProfileRequest(
-                    last_name=f"❤ {now}"
-                ))
+                await client(UpdateProfileRequest(last_name=f"❤ {now}"))
                 print(f"✅ ساعت آپدیت شد: {now}")
             except Exception as e:
                 print("❌ خطا در آپدیت ساعت:", e)
@@ -82,7 +212,7 @@ async def getTime(event):
     now = datetime.now(tehran_tz).strftime("%H:%M")
     weekday = datetime.now(tehran_tz).strftime("%A")
     date = jdatetime.date.today().strftime("%Y/%m/%d")
-    weekday_fa = days_fa[weekday]
+    weekday_fa = days_fa.get(weekday, weekday)
     await event.reply(
         f"⏰ ساعت به وقت ایران: **{now}**\n"
         f"📅 امروز **{weekday_fa}** هست\n"
@@ -103,45 +233,31 @@ async def toggle_clock(event):
         clock_enabled = True
         await event.reply("⏰ ساعت فعال شد")
 
-# ============================
-# تعطیلات و تقویم (اسکرین‌شات از time.ir)
-# ============================
-def fetch_calendar_image():
-    params = {
-        "token": SCREENSHOT_API_KEY,
-        "url": "https://www.time.ir/",
-        "output": "image",
-        "file_type": "png",
-        "wait_for_event": "load",
-        "device": "desktop",   # 🖥️ اینجا دسکتاپ انتخاب می‌کنیم
-        "viewport": "1920x1080",
-    }
+# فرمان برای بروزرسانی دستی کش (Force refresh)
+@client.on(events.NewMessage(pattern="^بروزرسانی تقویم$"))
+async def refresh_calendar_command(event):
+    if not event.out:
+        return
+    await event.reply("⏳ در حال بروزرسانی تقویم (اسکرین‌شات جدید)...")
+    # عملیات blocking را در ترد جدا اجرا می‌کنیم
+    img = await asyncio.to_thread(lambda: fetch_screenshot_from_api(selector=DEFAULT_CALENDAR_SELECTOR))
+    if img:
+        await event.reply(file=img, message="✅ تقویم آپدیت شد (نسخهٔ جدید ماهیانه)")
+    else:
+        await event.reply("❌ بروزرسانی موفق نبود — دوباره تلاش کن یا لاگ‌ها را بررسی کن.")
 
-    filename = "calendar.png"
-    try:
-        r = requests.get(SCREENSHOT_ENDPOINT, params=params, stream=True)
-        if r.status_code == 200:
-            with open(filename, "wb") as f:
-                for chunk in r.iter_content(1024):
-                    f.write(chunk)
-            return filename
-        else:
-            print("❌ خطا در گرفتن اسکرین‌شات:", r.text)
-            return None
-    except Exception as e:
-        print("❌ خطا در دانلود اسکرین‌شات:", e)
-        return None
-
+# هندلر اصلی ارسال تقویم (با کش ماهیانه)
 @client.on(events.NewMessage(pattern="^(تاریخ|تقویم|تعطیلات)$"))
 async def send_calendar(event):
     if not event.out:
         return
 
+    # آماده‌سازی کپشن
     today_jalali = jdatetime.date.today()
     today_gregorian = datetime.today().date()
-    today_hijri = "25 ربیع الاول 1447"  # TODO: از API قمری بگیریم
+    today_hijri = "25 ربیع الاول 1447"  # TODO: API برای قمری اگر خواستی میشه اضافه کرد
 
-    days_passed = today_gregorian.timetuple().tm_yday
+    days_passed = today_gregali = today_gregorian.timetuple().tm_yday
     total_days = 366 if calendar.isleap(today_gregorian.year) else 365
     days_left = total_days - days_passed
     percent = (days_passed / total_days) * 100
@@ -155,20 +271,36 @@ async def send_calendar(event):
         f"📊 روزهای باقی‌مانده: {days_left} ({100 - percent:.2f}%)"
     )
 
-    img = fetch_calendar_image()
+    # ۱) سعی کن از کش استفاده کنی یا در صورت نبود، بسازش
+    img = await asyncio.to_thread(get_or_create_calendar_image)
     if img:
         await event.reply(file=img, message=caption)
     else:
-        await event.reply(caption + "\n\n❌ نتونستم عکس تقویم رو بگیرم.")
+        # اگر نتوانستیم عکس بگیریم، کپشن را بدون عکس بفرست
+        await event.reply(caption + "\n\n❌ نتونستم عکس تقویم رو بگیرم. لطفاً بعداً تلاش کن.")
 
 # ============================
-# اجرای اصلی
+# پیش‌بارگیری (prefetch) هنگام استارت
+# ============================
+async def prefetch_calendar_on_start():
+    # سعی می‌کنیم در پس‌زمینه کش ماه جاری را داشته باشیم
+    await asyncio.sleep(2)  # کمی تأخیر کوتاه برای استبل بودن کانکشن
+    print("⏳ چک کردن کش تقویم ماه جاری...")
+    img = await asyncio.to_thread(get_or_create_calendar_image)
+    if img:
+        print("✅ کش تقویم حاضر است:", img)
+    else:
+        print("⚠️ نتوانست کش تقویم را بسازد.")
+
+# ============================
+# اجرا
 # ============================
 async def main():
     me = await client.get_me()
     print(f"✅ لاگین شدی به عنوان: {getattr(me, 'username', me.id)}")
     await client.send_message("me", "KishMish آماده به کار هستش ✅")
     client.loop.create_task(clock_updater())
+    client.loop.create_task(prefetch_calendar_on_start())
     await client.run_until_disconnected()
 
 if __name__ == "__main__":
