@@ -9,6 +9,7 @@ import jdatetime
 import calendar
 import pytz
 import json
+import xml.etree.ElementTree as ET
 from datetime import datetime
 
 # ============================
@@ -49,7 +50,7 @@ SESSION_NAME = "pixiself_session"
 SCREENSHOT_API_KEY = os.environ.get("SCREENSHOT_API_KEY", "")
 SCREENSHOT_ENDPOINT = "https://shot.screenshotapi.net/screenshot"
 
-# selector برای بخش مناسبت‌های time.ir — اگر می‌خواهی عوض کنی ENV بذار
+# selector برای بخش مناسبت‌های time.ir
 DEFAULT_CALENDAR_SELECTOR = os.environ.get(
     "CALENDAR_SELECTOR",
     "EventList_root__Ub1m_ EventCalendar_root__eventList__chdpK"
@@ -71,7 +72,7 @@ client = TelegramClient(SESSION_NAME, API_ID, API_HASH)
 clock_enabled = False  # وضعیت ساعت پروفایل
 
 # ============================
-# کمکی‌های کش
+# کش تقویم
 # ============================
 def read_cache_meta():
     if not os.path.exists(CACHE_META):
@@ -90,7 +91,6 @@ def cached_filename_for(j_year, j_month):
     return f"calendar_{j_year}_{j_month}.png"
 
 def get_cached_if_current():
-    """اگر کش ماه جاری موجود و فایل وجود دارد، مسیر فایل را برگردان."""
     meta = read_cache_meta()
     now_j = jdatetime.date.today()
     if not meta:
@@ -105,28 +105,26 @@ def get_cached_if_current():
     return None
 
 # ============================
-# گرفتن اسکرین‌شات از screenshotapi.net
-# (synchronous — چون با requests است؛ در async از asyncio.to_thread فراخوانی کن)
+# ScreenshotAPI
 # ============================
 def fetch_screenshot_from_api(selector=None):
-    endpoint = "https://shot.screenshotapi.net/screenshot"
     params = {
         "token": SCREENSHOT_API_KEY,
         "url": "https://www.time.ir/",
         "output": "image",
         "file_type": "png",
-        "device": "desktop",        # 👈 این خط مهمه
-        "width": 1920,              # عرض صفحه دسکتاپ
+        "device": "desktop",
+        "width": 1920,
         "height": 1080,
         "wait_for_event": "load",
         "selector": ".EventCalendar_root__eventList__chdpK"
     }
 
     if selector:
-        params["selector"] = selector  # فقط اگر بخوای بخش خاصی رو بگیره
+        params["selector"] = selector
 
     try:
-        r = requests.get(endpoint, params=params, timeout=60)
+        r = requests.get(SCREENSHOT_ENDPOINT, params=params, timeout=60)
         if r.status_code == 200:
             with open("calendar.png", "wb") as f:
                 f.write(r.content)
@@ -139,22 +137,44 @@ def fetch_screenshot_from_api(selector=None):
         return None
 
 def get_or_create_calendar_image():
-    """
-    اگر کش موجود است آن را برگردان؛ وگرنه عکس جدید بگیر، ذخیره کن و برگردان.
-    (این فانکشن را از async با asyncio.to_thread فراخوانی کن)
-    """
-    # 1) چک کش
     cached = get_cached_if_current()
     if cached:
         return cached
-
-    # 2) اگر نبود، بگیر و برگردان
-    selector = DEFAULT_CALENDAR_SELECTOR
     fname = fetch_screenshot_from_api()
     return fname
 
 # ============================
-# آپدیت‌کننده ساعت پروفایل (همان قبلی)
+# تابع گرفتن آب‌وهوا از Parsijoo API
+# ============================
+def get_weather_parsijoo(city="تهران"):
+    url = f"http://parsijoo.ir/api?serviceType=weather-API&q={city}"
+    try:
+        r = requests.get(url, timeout=10)
+        if r.status_code != 200:
+            return f"❌ خطا در دریافت آب‌وهوا برای {city}"
+        root = ET.fromstring(r.content)
+        day = root.find(".//day")
+        if day is None:
+            return f"❌ اطلاعات هوا برای {city} یافت نشد"
+
+        status = day.findtext("status", default="—")
+        temp = day.findtext("temp", default="—")
+        min_temp = day.findtext("min-temp", default="—")
+        max_temp = day.findtext("max-temp", default="—")
+        city_name = day.findtext("city-name", default=city)
+
+        msg = (
+            f"🌤 وضعیت هوا در {city_name}:\n"
+            f"• وضعیت: {status}\n"
+            f"🌡 دما: {temp}°C\n"
+            f"🔻 حداقل: {min_temp}°C    🔺 حداکثر: {max_temp}°C"
+        )
+        return msg
+    except Exception as e:
+        return f"❌ خطا در دریافت آب‌وهوا: {e}"
+
+# ============================
+# آپدیت ساعت پروفایل
 # ============================
 async def clock_updater():
     global clock_enabled
@@ -214,20 +234,19 @@ async def toggle_clock(event):
         clock_enabled = True
         await event.reply("⏰ ساعت فعال شد")
 
-# فرمان برای بروزرسانی دستی کش (Force refresh)
+# بروزرسانی تقویم دستی
 @client.on(events.NewMessage(pattern="^بروزرسانی تقویم$"))
 async def refresh_calendar_command(event):
     if not event.out:
         return
     await event.reply("⏳ در حال بروزرسانی تقویم (اسکرین‌شات جدید)...")
-    # عملیات blocking را در ترد جدا اجرا می‌کنیم
     img = await asyncio.to_thread(lambda: fetch_screenshot_from_api(selector=DEFAULT_CALENDAR_SELECTOR))
     if img:
         await event.reply(file=img, message="✅ تقویم آپدیت شد (نسخهٔ جدید ماهیانه)")
     else:
         await event.reply("❌ بروزرسانی موفق نبود — دوباره تلاش کن یا لاگ‌ها را بررسی کن.")
 
-# هندلر اصلی ارسال تقویم (با کش ماهیانه)
+# ارسال تقویم
 @client.on(events.NewMessage(pattern="^(تاریخ|تقویم|تعطیلات)$"))
 async def send_calendar(event):
     if not event.out:
@@ -236,18 +255,12 @@ async def send_calendar(event):
     today_jalali = jdatetime.date.today()
     today_gregorian = datetime.today().date()
 
-    # روز هفته فارسی
     weekday_fa = days_fa[today_gregorian.strftime("%A")]
-    # تاریخ کامل مثل "27 شهریور 1404"
     date_fa = f"{today_jalali.day} {months_fa[today_jalali.month]} {today_jalali.year}"
 
-    # تاریخ قمری (فعلا دستی یا از API بعداً)
-    today_hijri = "الخميس - ۲۶ ربيع الأول ۱۴۴۷"
-
-    # تاریخ میلادی
+    today_hijri = "الخميس - ۲۶ ربيع الأول ۱۴۴۷"  # فعلاً ثابت
     date_en = today_gregorian.strftime("%A - %Y %d %B")
 
-    # محاسبه روزهای سپری‌شده
     days_passed = today_gregorian.timetuple().tm_yday
     total_days = 366 if calendar.isleap(today_gregorian.year) else 365
     days_left = total_days - days_passed
@@ -269,13 +282,21 @@ async def send_calendar(event):
     else:
         await event.reply(caption + "\n\n❌ نتونستم عکس تقویم رو بگیرم.")
 
+# هندلر آب‌وهوا
+@client.on(events.NewMessage(pattern="^(آب.?وهوا|هواشناسی)( .+)?$"))
+async def weather_handler_parsijoo(event):
+    if not event.out:
+        return
+    parts = event.raw_text.split(maxsplit=1)
+    city = parts[1].strip() if len(parts) > 1 else "تهران"
+    report = get_weather_parsijoo(city)
+    await event.reply(report)
 
 # ============================
-# پیش‌بارگیری (prefetch) هنگام استارت
+# پیش‌بارگیری
 # ============================
 async def prefetch_calendar_on_start():
-    # سعی می‌کنیم در پس‌زمینه کش ماه جاری را داشته باشیم
-    await asyncio.sleep(2)  # کمی تأخیر کوتاه برای استبل بودن کانکشن
+    await asyncio.sleep(2)
     print("⏳ چک کردن کش تقویم ماه جاری...")
     img = await asyncio.to_thread(get_or_create_calendar_image)
     if img:
@@ -298,20 +319,3 @@ if __name__ == "__main__":
     print("🚀 در حال اجرا ...")
     with client:
         client.loop.run_until_complete(main())
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
