@@ -242,8 +242,8 @@ async def send_calendar(event):
         f"• تاریخ امروز : {weekday_fa} - {date_fa}\n\n"
         f"• تاریخ قمری : {today_hijri}\n"
         f"• تاریخ میلادی : {date_en}\n\n"
-        f"• روز های سپری شده : {days_passed} روز ( {percent:.2f} درصد )\n"
-        f"• روز های باقی مانده : {days_left} روز ( {100 - percent:.2f} درصد )"
+        f"• روز های سپری شده : {days_passed} روز ( {percent} درصد )\n"
+        f"• روز های باقی مانده : {days_left} روز ( {100 - percent} درصد )"
     )
 
     img = get_or_create_calendar_image()
@@ -281,6 +281,7 @@ if __name__ == "__main__":
     print("🚀 در حال اجرا ...")
     with client:
         client.loop.run_until_complete(main())
+
 
 
 
