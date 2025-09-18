@@ -227,15 +227,15 @@ async def send_calendar(event):
     days_left = total_days - days_passed
     percent = (days_passed / total_days) * 100
 
-caption = (
-    "◄ ساعت و تاریخ :\n\n"
-    f"• ساعت : {datetime.now(tehran_tz).strftime('%H:%M')}\n"
-    f"• تاریخ امروز : {today_jalali.strftime('%A - %d %B %Y')}\n\n"
-    f"• تاریخ قمری : {today_hijri}\n"
-    f"• تاریخ میلادی : {today_gregorian.strftime('%A - %Y %d %B')}\n\n"
-    f"• روز های سپری شده : {days_passed} روز ( {percent:.2f} درصد )\n"
-    f"• روز های باقی مانده : {days_left} روز ( {100 - percent:.2f} درصد )"
-    )
+    caption = (
+        "◄ ساعت و تاریخ :\n\n"
+        f"• ساعت : {datetime.now(tehran_tz).strftime('%H:%M')}\n"
+        f"• تاریخ امروز : {today_jalali.strftime('%A - %d %B %Y')}\n\n"
+        f"• تاریخ قمری : {today_hijri}\n"
+        f"• تاریخ میلادی : {today_gregorian.strftime('%A - %Y %d %B')}\n\n"
+        f"• روز های سپری شده : {days_passed} روز ( {percent:.2f} درصد )\n"
+        f"• روز های باقی مانده : {days_left} روز ( {100 - percent:.2f} درصد )"
+        )
     
 
     img = get_or_create_calendar_image()
@@ -274,6 +274,7 @@ if __name__ == "__main__":
     print("🚀 در حال اجرا ...")
     with client:
         client.loop.run_until_complete(main())
+
 
 
 
