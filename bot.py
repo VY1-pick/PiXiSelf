@@ -101,7 +101,7 @@ def fetch_screenshot_from_api(selector=None):
         "device": "desktop",
         "viewport": "1920x1080",
         "wait_for_event": "load",
-        "delay": 5000
+        "selector": ".EventCalendar_root__eventList__chdpK"
     }
 
     if selector:
@@ -270,6 +270,7 @@ if __name__ == "__main__":
     print("🚀 در حال اجرا ...")
     with client:
         client.loop.run_until_complete(main())
+
 
 
 
