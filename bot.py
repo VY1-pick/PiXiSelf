@@ -6,25 +6,9 @@ import asyncio
 import requests
 import jdatetime
 import calendar
-import matplotlib.pyplot as plt
-import matplotlib
-import matplotlib.font_manager as fm
 import pytz
 from datetime import datetime
 from telethon import TelegramClient, events
-
-# ============================
-# تنظیم فونت فارسی برای matplotlib
-# ============================
-FONT_URL = "https://github.com/googlefonts/noto-fonts/raw/main/hinted/ttf/NotoSansArabic/NotoSansArabic-Regular.ttf"
-FONT_PATH = "NotoSansArabic-Regular.ttf"
-
-if not os.path.exists(FONT_PATH):
-    import urllib.request
-    urllib.request.urlretrieve(FONT_URL, FONT_PATH)
-
-prop = fm.FontProperties(fname=FONT_PATH)
-matplotlib.rcParams['font.family'] = prop.get_name()
 
 # ============================
 # داده‌ها و تنظیمات
@@ -41,9 +25,8 @@ days_fa = {
 
 API_ID = int(os.environ.get("API_ID", "0"))
 API_HASH = os.environ.get("API_HASH", "")
-HOLIDAY_API = "https://holidayapi.ir/jalali/"
-tehran_tz = pytz.timezone("Asia/Tehran")
 SESSION_NAME = "pixiself_session"
+tehran_tz = pytz.timezone("Asia/Tehran")
 
 if not os.path.exists(f"{SESSION_NAME}.session"):
     print("❌ فایل session پیدا نشد. لطفاً اول روی سیستم لاگین کن "
@@ -51,7 +34,6 @@ if not os.path.exists(f"{SESSION_NAME}.session"):
     sys.exit(1)
 
 client = TelegramClient(SESSION_NAME, API_ID, API_HASH)
-
 clock_enabled = False  # وضعیت ساعت پروفایل
 
 # ============================
@@ -118,34 +100,32 @@ async def toggle_clock(event):
         await event.reply("⏰ ساعت فعال شد")
 
 # ============================
-# تعطیلات و تقویم
+# تعطیلات و تقویم (با اسکرین‌شات سرویس بیرونی)
 # ============================
-def make_holidays_image(holidays, out_path="calendar.png"):
-    fig, ax = plt.subplots(figsize=(8, 10))
-    ax.axis('off')
-    ax.set_title("📌 مناسبت‌های ۱۰ روز آینده", fontsize=16, fontweight="bold")
+def fetch_calendar_image():
+    # ⚠️ این URL باید با سرویس اسکرین‌شات جایگزین بشه (مثلاً urlbox.io یا سرویس شخصی)
+    # نمونه: https://api.screenshotapi.net/screenshot?token=YOUR_TOKEN&url=https://www.time.ir/
+    url = os.environ.get("CALENDAR_SHOT_URL", "")
+    filename = "calendar.png"
 
-    text = "\n".join([f"{i+1}. {h}" for i, h in enumerate(holidays)])
-    ax.text(0.05, 0.95, text, fontsize=12, va="top", ha="left", wrap=True, fontproperties=prop)
+    if not url:
+        print("❌ CALENDAR_SHOT_URL ست نشده.")
+        return None
 
-    plt.savefig(out_path, bbox_inches="tight", dpi=200)
-    plt.close()
+    try:
+        r = requests.get(url)
+        if r.status_code == 200:
+            with open(filename, "wb") as f:
+                f.write(r.content)
+            return filename
+        else:
+            print("❌ خطا در گرفتن اسکرین‌شات:", r.text)
+            return None
+    except Exception as e:
+        print("❌ خطا در دانلود اسکرین‌شات:", e)
+        return None
 
-def get_holidays(days=7):
-    today = jdatetime.date.today()
-    holidays = []
-    for i in range(days):
-        d = today + jdatetime.timedelta(days=i)
-        url = f"{HOLIDAY_API}{d.year}/{d.month}/{d.day}"
-        try:
-            res = requests.get(url).json()
-            if "events" in res and res["events"]:
-                holidays.append(f"{d.strftime('%Y/%m/%d')} → {', '.join(res['events'])}")
-        except Exception:
-            continue
-    return holidays if holidays else ["هیچ تعطیلی یا مناسبتی در این بازه نیست."]
-
-@client.on(events.NewMessage(pattern="^(تاریخ|تقویم)$"))
+@client.on(events.NewMessage(pattern="^(تاریخ|تقویم|تعطیلات)$"))
 async def send_calendar(event):
     if not event.out:
         return
@@ -159,9 +139,6 @@ async def send_calendar(event):
     days_left = total_days - days_passed
     percent = (days_passed / total_days) * 100
 
-    holidays = get_holidays(10)
-    make_holidays_image(holidays, out_path="calendar.png")
-
     caption = (
         f"⏰ ساعت: {datetime.now(tehran_tz).strftime('%H:%M')}\n"
         f"📅 تاریخ شمسی: {today_jalali.strftime('%A %d %B %Y')}\n"
@@ -171,7 +148,11 @@ async def send_calendar(event):
         f"📊 روزهای باقی‌مانده: {days_left} ({100 - percent:.2f}%)"
     )
 
-    await event.reply(file="calendar.png", message=caption)
+    img = fetch_calendar_image()
+    if img:
+        await event.reply(file=img, message=caption)
+    else:
+        await event.reply(caption + "\n\n❌ نتونستم عکس تقویم رو بگیرم.")
 
 # ============================
 # اجرای اصلی
