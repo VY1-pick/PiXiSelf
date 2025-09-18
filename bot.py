@@ -216,32 +216,37 @@ async def send_calendar(event):
     if not event.out:
         return
 
-    # آماده‌سازی کپشن
     today_jalali = jdatetime.date.today()
     today_gregorian = datetime.today().date()
-    today_hijri = "25 ربیع الاول 1447"  # TODO: API برای قمری اگر خواستی میشه اضافه کرد
 
-    days_passed = today_gregali = today_gregorian.timetuple().tm_yday
+    # TODO: از API تاریخ قمری بگیریم – فعلا دستی می‌ذاریم
+    today_hijri = "الخميس - ۲۶ ربيع الأول ۱۴۴۷"
+
+    days_passed = today_gregorian.timetuple().tm_yday
     total_days = 366 if calendar.isleap(today_gregorian.year) else 365
     days_left = total_days - days_passed
     percent = (days_passed / total_days) * 100
 
+    # ساخت متن دقیق طبق خواسته شما
     caption = (
-        f"⏰ ساعت: {datetime.now(tehran_tz).strftime('%H:%M')}\n"
-        f"📅 تاریخ شمسی: {today_jalali.strftime('%A %d %B %Y')}\n"
-        f"📅 تاریخ قمری: {today_hijri}\n"
-        f"📅 تاریخ میلادی: {today_gregorian.strftime('%A %d %B %Y')}\n\n"
-        f"📊 روزهای سپری شده: {days_passed} ({percent:.2f}%)\n"
-        f"📊 روزهای باقی‌مانده: {days_left} ({100 - percent:.2f}%)"
+        "◄ ساعت و تاریخ :\n\n"
+        f"• ساعت : {datetime.now(tehran_tz).strftime('%H:%M')}\n"
+        f"• تاریخ امروز : {today_jalali.strftime('%A - %d %B %Y')}\n\n"
+        f"• تاریخ قمری : {today_hijri}\n"
+        f"• تاریخ میلادی : {today_gregorian.strftime('%A - %Y %d %B')}\n\n"
+        f"• روز های سپری شده : {days_passed} روز ( {percent:.2f} درصد )\n"
+        f"• روز های باقی مانده : {days_left} روز ( {100 - percent:.2f} درصد )"
     )
 
-    # ۱) سعی کن از کش استفاده کنی یا در صورت نبود، بسازش
-    img = await asyncio.to_thread(get_or_create_calendar_image)
+    # گرفتن یا استفاده از عکس کش‌شده
+    img = get_or_create_calendar_image()
+
+    # ارسال متن و بعد عکس
+    await event.reply(caption)
     if img:
-        await event.reply(file=img, message=caption)
+        await event.reply(file=img)
     else:
-        # اگر نتوانستیم عکس بگیریم، کپشن را بدون عکس بفرست
-        await event.reply(caption + "\n\n❌ نتونستم عکس تقویم رو بگیرم. لطفاً بعداً تلاش کن.")
+        await event.reply("❌ نتونستم عکس تقویم رو بگیرم.")
 
 # ============================
 # پیش‌بارگیری (prefetch) هنگام استارت
@@ -271,6 +276,7 @@ if __name__ == "__main__":
     print("🚀 در حال اجرا ...")
     with client:
         client.loop.run_until_complete(main())
+
 
 
 
