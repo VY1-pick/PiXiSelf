@@ -98,8 +98,9 @@ def fetch_screenshot_from_api(selector=None):
         "url": "https://www.time.ir/",
         "output": "image",
         "file_type": "png",
-        "device": "desktop",
-        "viewport": "1920x1080",
+        "device": "desktop",        # 👈 این خط مهمه
+        "width": 1920,              # عرض صفحه دسکتاپ
+        "height": 1080,
         "wait_for_event": "load",
         "selector": ".EventCalendar_root__eventList__chdpK"
     }
@@ -270,6 +271,7 @@ if __name__ == "__main__":
     print("🚀 در حال اجرا ...")
     with client:
         client.loop.run_until_complete(main())
+
 
 
 
