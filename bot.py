@@ -339,17 +339,16 @@ async def send_calendar(event):
 # هندلر آب‌وهوا (پذیرش 'آ' یا 'ا' در ابتدای آب)
 # ============================
 # الگو: قبول کنه "آب و هوا" یا "اب و هوا" یا "آب‌وهوا" یا "هواشناسی"
-@client.on(events.NewMessage(pattern=r'^(?:[آا]ب\s*و\s*هوا|هواشناسی)(?:\s+(.+))?$'))
+# الگو: قبول کنه "آب و هوا" یا "اب و هوا" یا "آب‌وهوا" یا "هواشناسی"
+@client.on(events.NewMessage(pattern=r'^(?:[آا]ب[\s‌]*و[\s‌]*هوا|هواشناسی)(?:\s+(.+))?$'))
 async def weather_handler_oneapi(event):
     if not event.out:
         return
-    # از pattern_match گروه 1 (شهر) را بگیریم اگر وجود داشته باشد
     m = event.pattern_match
     city = None
     if m and m.group(1):
         city = m.group(1).strip()
     else:
-        # fallback به تفکیک متن خام (اگر کاربر نوشت: "آب و هوا" بدون شهر)
         parts = event.raw_text.split(maxsplit=1)
         if len(parts) > 1:
             city = parts[1].strip()
@@ -359,13 +358,11 @@ async def weather_handler_oneapi(event):
     report, icon = get_weather_oneapi(city)
     try:
         if icon:
-            # اگر آدرس آیکون معتبر باشه ارسال کن
             await event.reply(report, file=icon)
         else:
             await event.reply(report)
     except Exception as e:
-        # در صورت بروز خطا (مثلاً فایل آیکون در دسترس نباشد)، فقط متن را بفرست
-        await event.reply(report + f"\n\n(تصویر آیکون قابل بارگیری نیست: {e})")
+        await event.reply(report + f"\n\n(آیکون قابل بارگیری نیست: {e})")
 
 # ============================
 # پیش‌بارگیری
@@ -394,3 +391,4 @@ if __name__ == "__main__":
     print("🚀 در حال اجرا ...")
     with client:
         client.loop.run_until_complete(main())
+
