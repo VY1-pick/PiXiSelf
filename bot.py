@@ -166,7 +166,7 @@ def get_weather_oneapi(city="تهران"):
         icon = result.get("icon", None)
 
         msg = (
-            f"🌤 وضعیت هوا در {city_name} ({country}):\n\n"
+            f"🌤 وضعیت هوا در {city_name}:\n\n"
             f"🌡 دما: {temp}°C\n"
             f"💧 رطوبت: {humidity}%\n"
             f"💨 باد: {wind}\n"
@@ -326,3 +326,4 @@ if __name__ == "__main__":
     print("🚀 در حال اجرا ...")
     with client:
         client.loop.run_until_complete(main())
+
