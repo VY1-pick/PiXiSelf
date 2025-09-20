@@ -8,9 +8,8 @@ import requests
 import jdatetime
 import calendar
 import pytz
-import json
 import re
-from datetime import datetime, timedelta
+from datetime import datetime
 
 # ============================
 # تنظیمات و متغیرها
@@ -43,18 +42,17 @@ if not os.path.exists(f"{SESSION_NAME}.session"):
     sys.exit(1)
 
 client = TelegramClient(SESSION_NAME, API_ID, API_HASH)
-clock_enabled = False  # وضعیت ساعت پروفایل
+clock_enabled = False
 
-# ----------------------------
-# توابع مرتبط با هوا و تقویم (مثل قبل)
-# ----------------------------
+# ============================
+# توابع هواشناسی
+# ============================
 def geocode_city_nominatim(city):
     try:
         url = "https://nominatim.openstreetmap.org/search"
         params = {"q": city, "format": "json", "limit": 1, "accept-language": "fa"}
         headers = {"User-Agent": "PiXiSelfBot/1.0"}
         r = requests.get(url, params=params, headers=headers, timeout=10)
-        r.raise_for_status()
         arr = r.json()
         if not arr:
             return None
@@ -67,7 +65,6 @@ def get_weather_open_meteo_by_coord(lat, lon, tz="Asia/Tehran"):
         url = "https://api.open-meteo.com/v1/forecast"
         params = {"latitude": lat, "longitude": lon, "current_weather": "true", "timezone": tz}
         r = requests.get(url, params=params, timeout=10)
-        r.raise_for_status()
         data = r.json()
         cur = data.get("current_weather")
         if not cur:
@@ -79,7 +76,6 @@ def get_weather_open_meteo_by_coord(lat, lon, tz="Asia/Tehran"):
         }
         desc = code_map.get(cur.get("weathercode"), "نامشخص")
         msg = (
-            f"📍 موقعیت: {lat}, {lon}\n\n"
             f"🌤 وضعیت: {desc}\n"
             f"🌡 دما: {cur.get('temperature')}°C\n"
             f"💨 سرعت باد: {cur.get('windspeed')} m/s\n"
@@ -90,19 +86,10 @@ def get_weather_open_meteo_by_coord(lat, lon, tz="Asia/Tehran"):
         return None
 
 def get_weather(city="تهران"):
-    # تلاش اولیه با One-API (اگر توکن باشد)
     if ONE_API_KEY:
         try:
-            url = "https://one-api.ir/translate/"  # (نیاز نداریم اینجا) <-- فقط برای هماهنگی ساختار
-            # از endpoint هواشناسی استفاده می‌کنیم:
-            url = f"https://one-api.ir/weather/"
-            headers = {
-                "one-api-token": ONE_API_KEY,
-                "Accept": "application/json",
-                "User-Agent": "PiXiSelfBot/1.0"
-            }
-            params = {"action": "current", "city": city}
-            r = requests.get(url, headers=headers, params=params, timeout=12)
+            url = f"https://one-api.ir/weather/?token={ONE_API_KEY}&action=current&city={city}"
+            r = requests.get(url, timeout=12)
             if r.status_code == 200:
                 data = r.json()
                 if data.get("status") == 200 and isinstance(data.get("result"), dict):
@@ -114,22 +101,17 @@ def get_weather(city="تهران"):
                     wind = result.get("wind", {})
                     city_name = result.get("city") or city
 
-                    lines = [
-                        f"🌍 وضعیت هوا در **{city_name}**:",
-                        f"🌤 وضعیت: {description}",
-                    ]
-                    if temp is not None: lines.append(f"🌡 دما: {temp}°C")
-                    if humidity is not None: lines.append(f"💧 رطوبت: {humidity}%")
-                    if wind.get("speed") is not None: lines.append(f"💨 باد: {wind.get('speed')} m/s")
-
-                    return ("\n".join(lines), None)
-            else:
-                # لاگ دقیق برای دیباگ (مثلاً 403)
-                print(f"[One-API weather] HTTP {r.status_code} — body: {r.text[:400]}")
+                    msg = (
+                        f"🌍 وضعیت هوا در **{city_name}**:\n\n"
+                        f"🌤 وضعیت: {description}\n"
+                        f"🌡 دما: {temp}°C\n"
+                        f"💧 رطوبت: {humidity}%\n"
+                        f"💨 باد: {wind.get('speed')} m/s"
+                    )
+                    return (msg, None)
         except Exception as e:
             print("Weather Error:", e)
 
-    # fallback: Open-Meteo
     geo = geocode_city_nominatim(city)
     if geo:
         lat, lon, display = geo
@@ -141,28 +123,24 @@ def get_weather(city="تهران"):
     return (f"❌ نتونستم وضعیت هوا برای «{city}» رو بیارم.", None)
 
 # ============================
-# ترجمه — تشخیص اتوماتیک زبان + ارسال توکن در هدر
+# توابع ترجمه
 # ============================
-def detect_lang_simple(text: str) -> str:
-    # اگر حروف فارسی وجود داشته باشد => fa، در غیر این صورت en
+def detect_language(text: str) -> str:
     if re.search(r'[\u0600-\u06FF]', text):
         return "fa"
-    return "en"
+    else:
+        return "en"
 
-def translate_text_auto(text: str):
-    """
-    برمی‌گرداند (result_text, error_or_None)
-    از One-API استفاده می‌کند و توکن را در هدر 'one-api-token' می‌فرستد.
-    """
+def translate_with_oneapi(text: str):
     if not ONE_API_KEY:
-        return ("❌ توکن One-API تنظیم نشده. لطفاً مقدار محیطی ONE_API_KEY را قرار بده.", None)
+        return "❌ توکن One-API تنظیم نشده است."
 
-    src = detect_lang_simple(text)
+    src = detect_language(text)
     if src == "fa":
-        lang = "fa|en"
+        lang_param = "fa|en"
         src_name, dst_name = "فارسی", "انگلیسی"
     else:
-        lang = "en|fa"
+        lang_param = "en|fa"
         src_name, dst_name = "English", "فارسی"
 
     endpoint = "https://one-api.ir/translate/"
@@ -171,54 +149,32 @@ def translate_text_auto(text: str):
         "Accept": "application/json",
         "User-Agent": "PiXiSelfBot/1.0"
     }
-    params = {
-        "action": "google",
-        "lang": lang,
-        "q": text
-    }
+    params = {"action": "google", "lang": lang_param, "q": text}
 
     try:
-        r = requests.get(endpoint, headers=headers, params=params, timeout=12)
-        # لاگ‌برداری برای کمک به دیباگ (در صورت خطا)
+        r = requests.get(endpoint, headers=headers, params=params, timeout=15)
+        if r.status_code == 401:
+            return "❌ خطا: توکن نامعتبر است (401)."
+        if r.status_code == 403:
+            return "❌ خطا: مجوز کافی نیست (403). بررسی کن سرویس ترجمه فعال باشه."
         if r.status_code != 200:
-            print(f"[One-API translate] HTTP {r.status_code} — body: {r.text[:600]}")
-        r.raise_for_status()
+            return f"❌ خطا در ترجمه: HTTP {r.status_code}"
         data = r.json()
-        # بررسی ساختار پاسخ
-        if not isinstance(data, dict):
-            return ("❌ پاسخ نامعتبر از سرویس ترجمه.", None)
         if data.get("status") != 200:
-            # خطای API — پیام داخل response را نشان بده
-            msg = data.get("message") or str(data)
-            return (f"❌ خطای سرویس ترجمه: {msg}", None)
-        result = data.get("result")
-        if not result:
-            return ("❌ سرویس ترجمه پاسخی نداد.", None)
-
-        # قالب زیبا برای پیام خروجی
-        out = (
-            f"🌐 **ترجمه خودکار** ({src_name} → {dst_name})\n\n"
-            f"📎 متن اصلی:\n`{text}`\n\n"
-            f"🔁 ترجمه:\n{result}"
+            return f"❌ خطای سرویس: {data.get('message', 'نامشخص')}"
+        translated = data.get("result")
+        if not translated:
+            return "❌ ترجمه دریافت نشد."
+        return (
+            f"🌐 ترجمه خودکار ({src_name} → {dst_name})\n\n"
+            f"📎 متن اصلی:\n{text}\n\n"
+            f"🔁 ترجمه:\n{translated}"
         )
-        return (out, None)
-    except requests.HTTPError as he:
-        # اگر 403 یا 401 یا ... باشه، در لاگ چاپ کن و پیام مناسبی به کاربر بده
-        status = getattr(he.response, "status_code", None)
-        body = getattr(he.response, "text", "")
-        print(f"[One-API translate] HTTPError {status} — {body[:800]}")
-        if status == 401:
-            return ("❌ خطا: توکن نامعتبر است (401). لطفاً ONE_API_KEY را بررسی کن.", None)
-        if status == 403:
-            return ("❌ خطا: مجوز کافی نیست (403). احتمالاً توکن یا دسترسی نامناسب است.", None)
-        return (f"❌ خطای HTTP در ترجمه: {status}", None)
     except Exception as e:
-        print("Translate Exception:", e)
-        return (f"❌ خطا در تماس با سرویس ترجمه: {e}", None)
-
+        return f"❌ خطا در تماس با سرویس ترجمه: {e}"
 
 # ============================
-# آپدیت ساعت پروفایل
+# بروزرسانی ساعت پروفایل
 # ============================
 async def clock_updater():
     global clock_enabled
@@ -245,7 +201,7 @@ async def getping(event):
     start = time.time()
     msg = await event.reply("⏳ در حال اندازه‌گیری...")
     latency = int((time.time() - start) * 1000)
-    await msg.edit(f"🏓 پینگ: **{latency} ms**\n✅ همه‌چی مرتب است!")
+    await msg.edit(f"🏓 پینگ: **{latency} ms**\n✅ همه‌چی مرتبه!")
 
 @client.on(events.NewMessage(pattern="^(ساعت|امروز)$"))
 async def getTime(event):
@@ -255,6 +211,7 @@ async def getTime(event):
     weekday_fa = days_fa.get(weekday, weekday)
     today_jalali = jdatetime.date.today()
     date_fa = f"{today_jalali.day} {months_fa[today_jalali.month]} {today_jalali.year}"
+
     await event.reply(
         f"⏰ ساعت: **{now}**\n"
         f"📅 امروز: **{weekday_fa}**\n"
@@ -279,38 +236,36 @@ async def send_calendar(event):
     jalali_today = jdatetime.date.today()
     weekday_fa = days_fa[today.strftime("%A")]
     date_fa = f"{jalali_today.day} {months_fa[jalali_today.month]} {jalali_today.year}"
+
     days_passed = today.timetuple().tm_yday
     total_days = 366 if calendar.isleap(today.year) else 365
     days_left = total_days - days_passed
     percent = (days_passed / total_days) * 100
 
-    # مثال: گرفتن تعطیلات ۷ روز آینده می‌تونه با فراخوانی API مشخص انجام بشه.
-    # اکنون نمونهٔ ثابت می‌ذاریم (تو می‌تونی بعداً از holidayapi.ir یا time.ir بخونی).
-    holidays = [
-        "🛑 جمعه - تعطیل هفتگی",
-    ]
+    holidays = ["🛑 جمعه - تعطیل هفتگی"]
 
     caption = (
         f"📅 امروز: **{weekday_fa} - {date_fa}**\n\n"
         f"📊 روزهای سپری‌شده: {days_passed} ({percent:.2f}%)\n"
         f"📊 روزهای باقی‌مانده: {days_left} ({100 - percent:.2f}%)\n\n"
+        f"🔔 تعطیلات ۷ روز آینده:\n" + "\n".join(holidays)
     )
+
     await event.reply(caption)
 
-# ============================
-# هندلر ترجمه — فقط وقتی خودت پیام می‌فرستی (event.out)
-# ============================
+@client.on(events.NewMessage(pattern=r'^(?:[آا]ب[\s‌]*و[\s‌]*هوا|هواشناسی)(?:\s+(.+))?$'))
+async def weather_handler(event):
+    if not event.out: return
+    city = event.pattern_match.group(1) or "تهران"
+    report, icon = get_weather(city)
+    await event.reply(report)
+
 @client.on(events.NewMessage(pattern=r'^ترجمه\s+(.+)$'))
 async def translate_handler(event):
-    if not event.out:
-        return
+    if not event.out: return
     text = event.pattern_match.group(1).strip()
-    result_text, _ = translate_text_auto_wrapper = translate_text_auto(text)  # تابع ترجمه بالا
-    # translate_text_auto برمی‌گرداند (text, None)
-    if isinstance(result_text, tuple):
-        # safety: if accidentally returned tuple
-        result_text = result_text[0]
-    await event.reply(result_text)
+    response = translate_with_oneapi(text)
+    await event.reply(response)
 
 # ============================
 # اجرا
