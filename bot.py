@@ -262,6 +262,7 @@ async def weather_handler(event):
     report, icon = get_weather(city)
     await event.reply(report)
 
+
 @client.on(events.NewMessage(pattern=r'^ترجمه\s+(.+)$'))
 async def translate_handler(event):
     if not event.out: return
@@ -283,4 +284,5 @@ if __name__ == "__main__":
     print("🚀 در حال اجرا ...")
     with client:
         client.loop.run_until_complete(main())
+
 
