@@ -9,7 +9,6 @@ import jdatetime
 import calendar
 import pytz
 import json
-import xml.etree.ElementTree as ET
 from datetime import datetime
 
 # ============================
@@ -46,15 +45,17 @@ API_ID = int(os.environ.get("API_ID", "0"))
 API_HASH = os.environ.get("API_HASH", "")
 SESSION_NAME = "pixiself_session"
 
-# screenshotapi.net key (محیطی)
+# ScreenshotAPI
 SCREENSHOT_API_KEY = os.environ.get("SCREENSHOT_API_KEY", "")
 SCREENSHOT_ENDPOINT = "https://shot.screenshotapi.net/screenshot"
 
-# selector برای بخش مناسبت‌های time.ir
 DEFAULT_CALENDAR_SELECTOR = os.environ.get(
     "CALENDAR_SELECTOR",
-    "EventList_root__Ub1m_ EventCalendar_root__eventList__chdpK"
+    ".EventCalendar_root__eventList__chdpK"
 )
+
+# OneAPI توکن هواشناسی
+ONE_API_KEY = os.environ.get("ONE_API_KEY", "")
 
 # فایل cache metadata
 CACHE_META = "calendar_cache.json"
@@ -144,34 +145,37 @@ def get_or_create_calendar_image():
     return fname
 
 # ============================
-# تابع گرفتن آب‌وهوا از Parsijoo API
+# هواشناسی با one-api.ir
 # ============================
-def get_weather_parsijoo(city="تهران"):
-    url = f"http://parsijoo.ir/api?serviceType=weather-API&q={city}"
+def get_weather_oneapi(city="تهران"):
+    url = f"https://one-api.ir/weather/?token={ONE_API_KEY}&action=current&city={city}"
     try:
-        r = requests.get(url, timeout=10)
-        if r.status_code != 200:
-            return f"❌ خطا در دریافت آب‌وهوا برای {city}"
-        root = ET.fromstring(r.content)
-        day = root.find(".//day")
-        if day is None:
-            return f"❌ اطلاعات هوا برای {city} یافت نشد"
+        r = requests.get(url, timeout=15)
+        data = r.json()
 
-        status = day.findtext("status", default="—")
-        temp = day.findtext("temp", default="—")
-        min_temp = day.findtext("min-temp", default="—")
-        max_temp = day.findtext("max-temp", default="—")
-        city_name = day.findtext("city-name", default=city)
+        if data.get("status") != 200:
+            return (f"❌ نتونستم اطلاعات هواشناسی رو بگیرم ({city})", None)
+
+        result = data.get("result", {})
+        city_name = result.get("city", city)
+        country = result.get("country", "")
+        temp = result.get("temperature", "N/A")
+        desc = result.get("description", "نامشخص")
+        humidity = result.get("humidity", "N/A")
+        wind = result.get("wind", "N/A")
+        icon = result.get("icon", None)
 
         msg = (
-            f"🌤 وضعیت هوا در {city_name}:\n"
-            f"• وضعیت: {status}\n"
+            f"🌤 وضعیت هوا در {city_name} ({country}):\n\n"
             f"🌡 دما: {temp}°C\n"
-            f"🔻 حداقل: {min_temp}°C    🔺 حداکثر: {max_temp}°C"
+            f"💧 رطوبت: {humidity}%\n"
+            f"💨 باد: {wind}\n"
+            f"📌 توضیحات: {desc}"
         )
-        return msg
+
+        return (msg, icon)
     except Exception as e:
-        return f"❌ خطا در دریافت آب‌وهوا: {e}"
+        return (f"❌ خطا در دریافت آب‌وهوا: {e}", None)
 
 # ============================
 # آپدیت ساعت پروفایل
@@ -284,13 +288,16 @@ async def send_calendar(event):
 
 # هندلر آب‌وهوا
 @client.on(events.NewMessage(pattern="^(آب.?وهوا|هواشناسی)( .+)?$"))
-async def weather_handler_parsijoo(event):
+async def weather_handler_oneapi(event):
     if not event.out:
         return
     parts = event.raw_text.split(maxsplit=1)
     city = parts[1].strip() if len(parts) > 1 else "تهران"
-    report = get_weather_parsijoo(city)
-    await event.reply(report)
+    report, icon = get_weather_oneapi(city)
+    if icon:
+        await event.reply(report, file=icon)
+    else:
+        await event.reply(report)
 
 # ============================
 # پیش‌بارگیری
