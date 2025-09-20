@@ -96,6 +96,7 @@ def get_weather(city="تهران"):
                     result = data["result"]
                     weather0 = (result.get("weather") or [{}])[0]
                     description = weather0.get("description") or "نامشخص"
+                    icon = weather0.get("icon") or "❓"
                     temp = result.get("main", {}).get("temp")
                     humidity = result.get("main", {}).get("humidity")
                     wind = result.get("wind", {})
@@ -103,12 +104,12 @@ def get_weather(city="تهران"):
 
                     msg = (
                         f"🌍 وضعیت هوا در **{city_name}**:\n\n"
-                        f"🌤 وضعیت: {description}\n"
+                        f"{icon} وضعیت: {description}\n"
                         f"🌡 دما: {temp}°C\n"
                         f"💧 رطوبت: {humidity}%\n"
                         f"💨 باد: {wind.get('speed')} m/s"
                     )
-                    return (msg, None)
+                    return (msg, icon)
         except Exception as e:
             print("Weather Error:", e)
 
@@ -121,6 +122,7 @@ def get_weather(city="تهران"):
             return (f"📍 {display}\n\n{msg}", icon)
 
     return (f"❌ نتونستم وضعیت هوا برای «{city}» رو بیارم.", None)
+
 
 # ============================
 # توابع ترجمه
@@ -281,3 +283,4 @@ if __name__ == "__main__":
     print("🚀 در حال اجرا ...")
     with client:
         client.loop.run_until_complete(main())
+
