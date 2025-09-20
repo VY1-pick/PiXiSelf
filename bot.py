@@ -1,3 +1,4 @@
+# bot.py (نسخهٔ آپدیت‌شده — شامل اصلاحات هواشناسی)
 from telethon.tl.functions.account import UpdateProfileRequest
 from telethon import TelegramClient, events
 import os
@@ -45,16 +46,17 @@ API_ID = int(os.environ.get("API_ID", "0"))
 API_HASH = os.environ.get("API_HASH", "")
 SESSION_NAME = "pixiself_session"
 
-# ScreenshotAPI
+# ScreenshotAPI (اختیاری)
 SCREENSHOT_API_KEY = os.environ.get("SCREENSHOT_API_KEY", "")
 SCREENSHOT_ENDPOINT = "https://shot.screenshotapi.net/screenshot"
 
+# selector برای بخش مناسبت‌های time.ir (اختیاری)
 DEFAULT_CALENDAR_SELECTOR = os.environ.get(
     "CALENDAR_SELECTOR",
     ".EventCalendar_root__eventList__chdpK"
 )
 
-# OneAPI توکن هواشناسی
+# OneAPI توکن هواشناسی (بذار توی Railway)
 ONE_API_KEY = os.environ.get("ONE_API_KEY", "")
 
 # فایل cache metadata
@@ -106,7 +108,7 @@ def get_cached_if_current():
     return None
 
 # ============================
-# ScreenshotAPI
+# ScreenshotAPI (اختیاری)
 # ============================
 def fetch_screenshot_from_api(selector=None):
     params = {
@@ -118,7 +120,7 @@ def fetch_screenshot_from_api(selector=None):
         "width": 1920,
         "height": 1080,
         "wait_for_event": "load",
-        "selector": ".EventCalendar_root__eventList__chdpK"
+        "selector": DEFAULT_CALENDAR_SELECTOR
     }
 
     if selector:
@@ -129,6 +131,10 @@ def fetch_screenshot_from_api(selector=None):
         if r.status_code == 200:
             with open("calendar.png", "wb") as f:
                 f.write(r.content)
+            # نوشته متا برای کش ماه جاری
+            now_j = jdatetime.date.today()
+            meta = {"jalali_year": now_j.year, "jalali_month": now_j.month, "file": "calendar.png"}
+            write_cache_meta(meta)
             return "calendar.png"
         else:
             print("❌ Screenshot API error:", r.text)
@@ -145,37 +151,80 @@ def get_or_create_calendar_image():
     return fname
 
 # ============================
-# هواشناسی با one-api.ir
+# هواشناسی با one-api.ir (طبق داکیومنت)
 # ============================
 def get_weather_oneapi(city="تهران"):
+    """
+    برگشت: (message_string, icon_url_or_None)
+    طبق داکیومنت: https://one-api.ir/... (action=current یا hourly)
+    """
+    if not ONE_API_KEY:
+        return (f"❌ توکن One-API تنظیم نشده. متغیر محیطی ONE_API_KEY را قرار بده.", None)
+
+    # city ممکنه به فارسی باشه؛ urlencode خود requests رو انجام میده
     url = f"https://one-api.ir/weather/?token={ONE_API_KEY}&action=current&city={city}"
+
     try:
         r = requests.get(url, timeout=15)
+        r.raise_for_status()
         data = r.json()
-
-        if data.get("status") != 200:
-            return (f"❌ نتونستم اطلاعات هواشناسی رو بگیرم ({city})", None)
-
-        result = data.get("result", {})
-        city_name = result.get("city", city)
-        country = result.get("country", "")
-        temp = result.get("temperature", "N/A")
-        desc = result.get("description", "نامشخص")
-        humidity = result.get("humidity", "N/A")
-        wind = result.get("wind", "N/A")
-        icon = result.get("icon", None)
-
-        msg = (
-            f"🌤 وضعیت هوا در {city_name}:\n\n"
-            f"🌡 دما: {temp}°C\n"
-            f"💧 رطوبت: {humidity}%\n"
-            f"💨 باد: {wind}\n"
-            f"📌 توضیحات: {desc}"
-        )
-
-        return (msg, icon)
     except Exception as e:
-        return (f"❌ خطا در دریافت آب‌وهوا: {e}", None)
+        return (f"❌ خطا در تماس با سرویس هواشناسی: {e}", None)
+
+    # بررسی وضعیت پاسخ
+    if not isinstance(data, dict) or data.get("status") != 200:
+        # ممکنه پیام خطا در فیلدهای دیگر باشد
+        msg_err = data.get("message") if isinstance(data, dict) else str(data)
+        return (f"❌ نتوانستم اطلاعات هوا را دریافت کنم: {msg_err}", None)
+
+    result = data.get("result", {})
+    # طبق مثال داکیومنت: result شامل weather (لیست)، main، wind، sys، country و غیره است
+    weather_list = result.get("weather") or []
+    weather0 = weather_list[0] if weather_list else {}
+    description = weather0.get("description") or weather0.get("main") or "نامشخص"
+    icon_code = weather0.get("icon")  # مثل "01d"
+
+    main = result.get("main", {})
+    temp = main.get("temp")
+    feels_like = main.get("feels_like")
+    temp_min = main.get("temp_min")
+    temp_max = main.get("temp_max")
+    pressure = main.get("pressure")
+    humidity = main.get("humidity")
+
+    wind = result.get("wind", {})
+    wind_speed = wind.get("speed")
+    wind_deg = wind.get("deg")
+
+    city_name = result.get("city") or result.get("name") or city
+    country = result.get("country") or (result.get("sys") or {}).get("country") or ""
+
+    # ساخت متن خوانا (فارسی)
+    lines = []
+    lines.append(f"🌤 وضعیت هوا در {city_name}{(' - ' + country) if country else ''}:")
+    if description:
+        lines.append(f"• وضعیت: {description}")
+    if temp is not None:
+        lines.append(f"🌡 دما: {temp}°C" + (f" (احساس: {feels_like}°C)" if feels_like is not None else ""))
+    if temp_min is not None and temp_max is not None:
+        lines.append(f"🔻 حداقل: {temp_min}°C    🔺 حداکثر: {temp_max}°C")
+    if humidity is not None:
+        lines.append(f"💧 رطوبت: {humidity}%")
+    if wind_speed is not None:
+        lines.append(f"💨 باد: {wind_speed} m/s" + (f" ({wind_deg}°)" if wind_deg is not None else ""))
+
+    msg = "\n".join(lines)
+
+    # ساخت URL آیکون (اگر فقط کد داده شده باشد از OpenWeather استفاده می‌کنیم)
+    icon_url = None
+    if icon_code:
+        # اگر api یک URL کامل داده باشه آن را برمی‌گردانیم (چک کوتاه)
+        if icon_code.startswith("http"):
+            icon_url = icon_code
+        else:
+            icon_url = f"http://openweathermap.org/img/wn/{icon_code}@2x.png"
+
+    return (msg, icon_url)
 
 # ============================
 # آپدیت ساعت پروفایل
@@ -286,18 +335,37 @@ async def send_calendar(event):
     else:
         await event.reply(caption + "\n\n❌ نتونستم عکس تقویم رو بگیرم.")
 
-# هندلر آب‌وهوا
-@client.on(events.NewMessage(pattern="^(آب.?وهوا|هواشناسی)( .+)?$"))
+# ============================
+# هندلر آب‌وهوا (پذیرش 'آ' یا 'ا' در ابتدای آب)
+# ============================
+# الگو: قبول کنه "آب و هوا" یا "اب و هوا" یا "آب‌وهوا" یا "هواشناسی"
+@client.on(events.NewMessage(pattern=r'^(?:[آا]ب\s*و\s*هوا|هواشناسی)(?:\s+(.+))?$'))
 async def weather_handler_oneapi(event):
     if not event.out:
         return
-    parts = event.raw_text.split(maxsplit=1)
-    city = parts[1].strip() if len(parts) > 1 else "تهران"
-    report, icon = get_weather_oneapi(city)
-    if icon:
-        await event.reply(report, file=icon)
+    # از pattern_match گروه 1 (شهر) را بگیریم اگر وجود داشته باشد
+    m = event.pattern_match
+    city = None
+    if m and m.group(1):
+        city = m.group(1).strip()
     else:
-        await event.reply(report)
+        # fallback به تفکیک متن خام (اگر کاربر نوشت: "آب و هوا" بدون شهر)
+        parts = event.raw_text.split(maxsplit=1)
+        if len(parts) > 1:
+            city = parts[1].strip()
+    if not city:
+        city = "تهران"
+
+    report, icon = get_weather_oneapi(city)
+    try:
+        if icon:
+            # اگر آدرس آیکون معتبر باشه ارسال کن
+            await event.reply(report, file=icon)
+        else:
+            await event.reply(report)
+    except Exception as e:
+        # در صورت بروز خطا (مثلاً فایل آیکون در دسترس نباشد)، فقط متن را بفرست
+        await event.reply(report + f"\n\n(تصویر آیکون قابل بارگیری نیست: {e})")
 
 # ============================
 # پیش‌بارگیری
@@ -326,4 +394,3 @@ if __name__ == "__main__":
     print("🚀 در حال اجرا ...")
     with client:
         client.loop.run_until_complete(main())
-
