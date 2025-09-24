@@ -297,6 +297,36 @@ async def handle_challenge_reply(message: types.Message):
                             f"جوایز شما: 💰 {reward_money}, 🛢️ {reward_oil}")
         await bot.edit_message_text(chat_id=chat_id, message_id=info["message_id"],
                                     text=f"چالش: {challenge['text']}\n✅ پاسخ صحیح داده شد توسط {message.from_user.username}")
+        
+# بخش اضافی برای اجرای ماموریت‌ها و اهدا جایزه
+async def check_mission_completion(chat_id: int):
+    missions = await db.fetchall("SELECT * FROM group_missions WHERE chat_id=$1 AND status='pending'", (chat_id,))
+    for mission in missions:
+        # مثال ساده: چک کنیم اگر ماموریت تکمیل شده باشد، کاربر مشخص برنده شود
+        # فرض می‌کنیم user_id ست شده وقتی کاربر ماموریت را انجام داد
+        if mission["user_id"] != 0:
+            user = await db.fetchone("SELECT username FROM users WHERE user_id=$1", (mission["user_id"],))
+            if not user:
+                continue
+            # اهدا جایزه به برنده
+            reward_money = 100  # می‌توان متغیر گذاشت
+            reward_oil = 100
+            await db.execute(
+                "UPDATE users SET money_amount = money_amount + $1, oil_amount = oil_amount + $2 WHERE user_id=$3",
+                (reward_money, reward_oil, mission["user_id"])
+            )
+            # تغییر وضعیت ماموریت
+            await db.execute(
+                "UPDATE group_missions SET status='completed' WHERE chat_id=$1 AND mission_id=$2 AND user_id=$3",
+                (chat_id, mission["mission_id"], mission["user_id"])
+            )
+            # ارسال پیام در گروه
+            await bot.send_message(
+                chat_id,
+                f"فرمانده: سرباز {user['username']} ماموریت `{mission['mission_id']}` را تکمیل کرد! 🎖️\n"
+                f"جوایز: 💰 {reward_money}, 🛢️ {reward_oil}"
+            )
+
 
 async def run_group_missions(chat_id: int):
     while True:
@@ -310,6 +340,7 @@ async def run_group_missions(chat_id: int):
                 await db.execute("INSERT INTO group_missions(chat_id, mission_id, user_id, status) VALUES($1,$2,0,'pending')", (chat_id, m['id']))
             await db.execute("INSERT INTO group_missions_schedule(chat_id, last_update) VALUES($1,$2) "
                              "ON CONFLICT (chat_id) DO UPDATE SET last_update=$2", (chat_id, now))
+        await check_mission_completion(chat_id)
         await asyncio.sleep(300)  # check every 5 minutes
 
 # ------------------ Bootstrap ------------------
@@ -333,3 +364,4 @@ if __name__ == "__main__":
         asyncio.run(main())
     except (KeyboardInterrupt, SystemExit):
         print("Bot stopped!")
+
