@@ -235,29 +235,68 @@ async def callback_other(cb: types.CallbackQuery):
 group_challenge_tasks: Dict[int, asyncio.Task] = {}
 group_mission_tasks: Dict[int, asyncio.Task] = {}
 
+active_challenges: Dict[int, Dict] = {}  # chat_id -> challenge info
+
 async def run_group_challenges(chat_id: int):
     while True:
         delay = random.randint(5*60, 30*60)
         await asyncio.sleep(delay)
+
         challenge = await db.fetchone("SELECT * FROM challenges ORDER BY RANDOM() LIMIT 1")
         if not challenge:
             continue
+
         msg = await bot.send_message(chat_id, f"فرمانده: سربازان! آماده باشید ⚔️\n\nچالش: {challenge['text']}\n⏱ زمان: 90 ثانیه")
         start_time = datetime.utcnow()
         end_time = start_time + timedelta(seconds=90)
+        active_challenges[chat_id] = {
+            "challenge": challenge,
+            "message_id": msg.message_id,
+            "start_time": start_time,
+            "end_time": end_time,
+            "answered": False
+        }
+
         await db.execute(
             "INSERT INTO group_challenges(chat_id, challenge_id, message_id, start_time, end_time, active) VALUES($1,$2,$3,$4,$5,$6) "
             "ON CONFLICT (chat_id) DO UPDATE SET challenge_id=$2, message_id=$3, start_time=$4, end_time=$5, active=$6",
             (chat_id, challenge['id'], msg.message_id, start_time, end_time, 1)
         )
+
+        # Timer
         for remaining in range(90, 0, -1):
             try:
                 await msg.edit_text(f"فرمانده: سربازان! آماده باشید ⚔️\n\nچالش: {challenge['text']}\n⏱ زمان: {remaining} ثانیه")
             except:
                 break
             await asyncio.sleep(1)
-        await db.execute("UPDATE group_challenges SET active=0 WHERE chat_id=$1", (chat_id,))
-        await msg.edit_text(f"فرمانده: زمان چالش به پایان رسید!\nپاسخ صحیح: {challenge['answer']}")
+
+        # پایان چالش
+        info = active_challenges.pop(chat_id, None)
+        if info and not info["answered"]:
+            await msg.edit_text(f"فرمانده: زمان چالش به پایان رسید!\nپاسخ صحیح: {challenge['answer']}")
+
+@dp.message()
+async def handle_challenge_reply(message: types.Message):
+    if not message.reply_to_message:
+        return
+    chat_id = message.chat.id
+    if chat_id not in active_challenges:
+        return
+    info = active_challenges[chat_id]
+    if message.reply_to_message.message_id != info["message_id"]:
+        return
+    challenge = info["challenge"]
+    if message.text.strip().lower() == challenge["answer"].strip().lower():
+        info["answered"] = True
+        reward_money = challenge["reward_money"]
+        reward_oil = challenge["reward_oil"]
+        await db.execute("UPDATE users SET money_amount = money_amount + $1, oil_amount = oil_amount + $2 WHERE user_id=$3",
+                         (reward_money, reward_oil, message.from_user.id))
+        await message.reply(f"فرمانده: تبریک سرباز {message.from_user.username}! 🎉\n"
+                            f"جوایز شما: 💰 {reward_money}, 🛢️ {reward_oil}")
+        await bot.edit_message_text(chat_id=chat_id, message_id=info["message_id"],
+                                    text=f"چالش: {challenge['text']}\n✅ پاسخ صحیح داده شد توسط {message.from_user.username}")
 
 async def run_group_missions(chat_id: int):
     while True:
