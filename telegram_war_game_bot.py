@@ -178,15 +178,15 @@ async def get_user_inventory(user_id: int) -> Optional[str]:
     )
 
 # چک کردن ادمین بودن ربات قبل از پاسخ به درخواست‌ها
-async def check_bot_admin(chat_id: int, cb_or_msg):
+async def check_bot_admin(chat_id: int, cb_or_msg=None):
     me = await bot.get_me()
     member = await bot.get_chat_member(chat_id, me.id)
     if member.status not in ("administrator", "creator"):
-        # اگه callback باشه
-        if isinstance(cb_or_msg, types.CallbackQuery):
-            await cb_or_msg.answer("⚠️ فرمانده در جایگاه خودش نیست و نمی‌تواند به شما رسیدگی کند!", show_alert=True)
-        else:
-            await cb_or_msg.answer("⚠️ فرمانده در جایگاه خودش نیست و نمی‌تواند به شما رسیدگی کند!")
+        if cb_or_msg:
+            if isinstance(cb_or_msg, types.CallbackQuery):
+                await cb_or_msg.answer("⚠️ فرمانده در جایگاه خودش نیست!", show_alert=True)
+            else:
+                await cb_or_msg.answer("⚠️ فرمانده در جایگاه خودش نیست!")
         return False
     return True
 
@@ -322,9 +322,9 @@ async def run_group_challenges(chat_id: int):
 async def handle_challenge_reply(message: types.Message):
     if not message.reply_to_message:
         return
+    chat_id = message.chat.id
     if not await check_bot_admin(chat_id, message):
         return
-    chat_id = message.chat.id
     if chat_id not in active_challenges:
         return
     info = active_challenges[chat_id]
@@ -411,6 +411,7 @@ async def main():
         group_mission_tasks[chat_id] = m_task
 
     print("Start polling...")
+    await bot.delete_webhook(drop_pending_updates=True)
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
@@ -420,6 +421,7 @@ if __name__ == "__main__":
         asyncio.run(main())
     except (KeyboardInterrupt, SystemExit):
         print("Bot stopped!")
+
 
 
 
