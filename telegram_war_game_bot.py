@@ -190,11 +190,22 @@ async def check_bot_admin(chat_id: int, cb_or_msg=None):
         return False
     return True
 
+# ------------------ Panel & Start ------------------
 async def get_common_groups(user_id: int) -> list[Tuple[int, str]]:
+    """گروه‌های مشترک کاربر و ربات که ربات عضو است"""
     rows = await db.fetchall("SELECT chat_id, title FROM groups")
-    return [(r["chat_id"], r["title"]) for r in rows]
+    valid_groups = []
+    me_id = (await bot.get_me()).id
+    for r in rows:
+        chat_id = r["chat_id"]
+        try:
+            member = await bot.get_chat_member(chat_id, me_id)
+            if member.status in ("creator", "administrator", "member"):
+                valid_groups.append((chat_id, r["title"]))
+        except:
+            continue
+    return valid_groups
 
-# ------------------ Panel ------------------
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
     await ensure_user(message.from_user)
@@ -209,8 +220,7 @@ async def cmd_start(message: types.Message):
             ]
         ])
         await message.answer(
-            f"فرمانده:\nسرباز {username}، می‌بینم که هنوز ربات رو به گروهت اضافه نکردی 😡\n"
-            "برای شروع بازی، لطفاً ربات را به گروهت اضافه کن و فرمانده را ادمین قرار بده.",
+            f"فرمانده:\nسرباز {username}، ربات عضو شد، لطفاً آن را ادمین کن تا بازی شروع شود ⚔️",
             reply_markup=kb
         )
         return
@@ -222,12 +232,18 @@ async def done_add_group(cb: types.CallbackQuery):
     username = cb.from_user.username or cb.from_user.first_name
     groups = await get_common_groups(cb.from_user.id)
     if not groups:
-        await cb.message.answer(f"فرمانده:\n سرباز {username}، گروه مشترک پیدا نشد! مطمئن شو که ربات در گروه اضافه شده است ⚠️")
+        await cb.message.answer(
+            f"فرمانده:\nسرباز {username}، هیچ گروه مشترکی پیدا نشد! مطمئن شو که ربات در گروه اضافه شده و ادمین است ⚠️"
+        )
         return
+    
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=title, callback_data=f"group_{chat_id}")] for chat_id, title in groups
     ])
-    await cb.message.answer(f"فرمانده:\n سرباز {username}، انتخاب کن در کدام گروه پروفایلت فعال شود. فرمانده مراقب توست 👀", reply_markup=kb)
+    await cb.message.answer(
+        f"فرمانده:\nسرباز {username}، انتخاب کن در کدام گروه پروفایلت فعال شود. فرمانده مراقب توست 👀",
+        reply_markup=kb
+    )
 
 @dp.callback_query(lambda cb: cb.data.startswith("group_"))
 async def select_group(cb: types.CallbackQuery):
@@ -280,14 +296,19 @@ async def run_group_challenges(chat_id: int):
         delay = random.randint(5*60, 30*60)
         await asyncio.sleep(delay)
 
+        # بررسی ادمین بودن قبل از ارسال پیام
+        if not await check_bot_admin(chat_id, cb_or_msg=None):
+            continue  # اگر ربات ادمین نیست، چالش اجرا نشود
+
         challenge = await db.fetchone("SELECT * FROM challenges ORDER BY RANDOM() LIMIT 1")
         if not challenge:
             continue
 
-        msg = await bot.send_message(chat_id, f"فرمانده:\n سربازان! آماده باشید ⚔️\n\nچالش: {challenge['text']}\n⏱ زمان: 90 ثانیه")
-        # بهتره قبل از ارسال پیام بررسی کنیم که ربات ادمین هست یا نه
-        if not await check_bot_admin(chat_id, msg):
-            continue  # اگر ربات ادمین نیست، چالش اجرا نشود
+        msg = await bot.send_message(
+            chat_id,
+            f"فرمانده:\n سربازان! آماده باشید ⚔️\n\nچالش: {challenge['text']}\n⏱ زمان: 90 ثانیه"
+        )
+
         start_time = datetime.utcnow()
         end_time = start_time + timedelta(seconds=90)
         active_challenges[chat_id] = {
@@ -308,7 +329,9 @@ async def run_group_challenges(chat_id: int):
         # Timer
         for remaining in range(90, 0, -1):
             try:
-                await msg.edit_text(f"فرمانده:\n سربازان! آماده باشید ⚔️\n\nچالش: {challenge['text']}\n⏱ زمان: {remaining} ثانیه")
+                await msg.edit_text(
+                    f"فرمانده:\n سربازان! آماده باشید ⚔️\n\nچالش: {challenge['text']}\n⏱ زمان: {remaining} ثانیه"
+                )
             except:
                 break
             await asyncio.sleep(1)
@@ -316,7 +339,9 @@ async def run_group_challenges(chat_id: int):
         # پایان چالش
         info = active_challenges.pop(chat_id, None)
         if info and not info["answered_by"]:
-            await msg.edit_text(f"فرمانده:\n زمان چالش به پایان رسید!\nپاسخ صحیح: {challenge['answer']}")
+            await msg.edit_text(
+                f"فرمانده:\n زمان چالش به پایان رسید!\nپاسخ صحیح: {challenge['answer']}"
+            )
 
 @dp.message()
 async def handle_challenge_reply(message: types.Message):
@@ -421,6 +446,7 @@ if __name__ == "__main__":
         asyncio.run(main())
     except (KeyboardInterrupt, SystemExit):
         print("Bot stopped!")
+
 
 
 
