@@ -150,7 +150,7 @@ async def get_user_inventory(user_id: int) -> Optional[str]:
     if not user:
         return None
     money, currency, oil, level, exp = user["money_amount"], user["money_currency"], user["oil_amount"], user["level"], user["experience"]
-    bar = "█" * level + "░" * (10 - level)
+    bar = "█" * min(level,10) + "░" * (10 - min(level,10))
     rigs = await db.fetchone("SELECT COUNT(*) as cnt, MIN(level) as min_level, MAX(level) as max_level FROM oil_rigs WHERE owner_id=$1", (user_id,))
     rigs_count, rigs_min, rigs_max = rigs["cnt"], rigs["min_level"], rigs["max_level"]
     return (
@@ -239,28 +239,23 @@ async def run_group_challenges(chat_id: int):
     while True:
         delay = random.randint(5*60, 30*60)
         await asyncio.sleep(delay)
-
         challenge = await db.fetchone("SELECT * FROM challenges ORDER BY RANDOM() LIMIT 1")
         if not challenge:
             continue
-
         msg = await bot.send_message(chat_id, f"فرمانده: سربازان! آماده باشید ⚔️\n\nچالش: {challenge['text']}\n⏱ زمان: 90 ثانیه")
         start_time = datetime.utcnow()
         end_time = start_time + timedelta(seconds=90)
-
         await db.execute(
             "INSERT INTO group_challenges(chat_id, challenge_id, message_id, start_time, end_time, active) VALUES($1,$2,$3,$4,$5,$6) "
             "ON CONFLICT (chat_id) DO UPDATE SET challenge_id=$2, message_id=$3, start_time=$4, end_time=$5, active=$6",
             (chat_id, challenge['id'], msg.message_id, start_time, end_time, 1)
         )
-
         for remaining in range(90, 0, -1):
             try:
                 await msg.edit_text(f"فرمانده: سربازان! آماده باشید ⚔️\n\nچالش: {challenge['text']}\n⏱ زمان: {remaining} ثانیه")
             except:
                 break
             await asyncio.sleep(1)
-
         await db.execute("UPDATE group_challenges SET active=0 WHERE chat_id=$1", (chat_id,))
         await msg.edit_text(f"فرمانده: زمان چالش به پایان رسید!\nپاسخ صحیح: {challenge['answer']}")
 
@@ -279,7 +274,7 @@ async def run_group_missions(chat_id: int):
         await asyncio.sleep(300)  # check every 5 minutes
 
 # ------------------ Bootstrap ------------------
-async def on_startup():
+async def main():
     await init_db()
     groups = await db.fetchall("SELECT chat_id FROM groups")
     for g in groups:
@@ -289,8 +284,13 @@ async def on_startup():
         group_challenge_tasks[chat_id] = c_task
         group_mission_tasks[chat_id] = m_task
 
+    print("Start polling...")
+    await dp.start_polling(bot)
+
 if __name__ == "__main__":
     import logging
     logging.basicConfig(level=logging.INFO)
-    asyncio.run(on_startup())
-    dp.run_polling(bot)
+    try:
+        asyncio.run(main())
+    except (KeyboardInterrupt, SystemExit):
+        print("Bot stopped!")
