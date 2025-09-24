@@ -353,8 +353,6 @@ async def handle_challenge_reply(message: types.Message):
         
 # بخش اضافی برای اجرای ماموریت‌ها و اهدا جایزه
 async def check_mission_completion(chat_id: int):
-    if not await check_bot_admin(chat_id, message=None):
-        continue
     missions = await db.fetchall("SELECT * FROM group_missions WHERE chat_id=$1 AND status='pending'", (chat_id,))
     for mission in missions:
         # مثال ساده: چک کنیم اگر ماموریت تکمیل شده باشد، کاربر مشخص برنده شود
@@ -375,6 +373,9 @@ async def check_mission_completion(chat_id: int):
                 "UPDATE group_missions SET status='completed' WHERE chat_id=$1 AND mission_id=$2 AND user_id=$3",
                 (chat_id, mission["mission_id"], mission["user_id"])
             )
+            
+            if not await check_bot_admin(chat_id, message=None):
+                continue
             # ارسال پیام در گروه
             await bot.send_message(
                 chat_id,
@@ -419,6 +420,7 @@ if __name__ == "__main__":
         asyncio.run(main())
     except (KeyboardInterrupt, SystemExit):
         print("Bot stopped!")
+
 
 
 
