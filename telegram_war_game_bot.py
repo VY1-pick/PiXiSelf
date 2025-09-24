@@ -232,6 +232,8 @@ async def done_add_group(cb: types.CallbackQuery):
 @dp.callback_query(lambda cb: cb.data.startswith("group_"))
 async def select_group(cb: types.CallbackQuery):
     chat_id = int(cb.data.split("_")[1])
+    if not await check_bot_admin(chat_id, cb):
+        return
     username = cb.from_user.username or cb.from_user.first_name
     await show_panel(cb.message, username, chat_id)
 
@@ -253,6 +255,8 @@ async def show_panel(message: types.Message, username: str, chat_id: Optional[in
 
 @dp.callback_query(lambda cb: cb.data == "inventory")
 async def callback_inventory(cb: types.CallbackQuery):
+    if not await check_bot_admin(cb.message.chat.id, cb):
+        return
     data = await get_user_inventory(cb.from_user.id)
     if data:
         await cb.message.edit_text(f"فرمانده:\n {cb.from_user.username}, موجودی شما:\n\n{data}", reply_markup=cb.message.reply_markup)
@@ -261,6 +265,8 @@ async def callback_inventory(cb: types.CallbackQuery):
 
 @dp.callback_query(lambda cb: cb.data in ("shop","exchange","rigs","hangars","guilds"))
 async def callback_other(cb: types.CallbackQuery):
+    if not await check_bot_admin(cb.message.chat.id, cb):
+        return
     await cb.answer(f"💡 بخش {cb.data} هنوز در دست ساخت است.", show_alert=True)
 
 # ------------------ Challenge & Missions ------------------
@@ -279,6 +285,9 @@ async def run_group_challenges(chat_id: int):
             continue
 
         msg = await bot.send_message(chat_id, f"فرمانده:\n سربازان! آماده باشید ⚔️\n\nچالش: {challenge['text']}\n⏱ زمان: 90 ثانیه")
+        # بهتره قبل از ارسال پیام بررسی کنیم که ربات ادمین هست یا نه
+        if not await check_bot_admin(chat_id, msg):
+            continue  # اگر ربات ادمین نیست، چالش اجرا نشود
         start_time = datetime.utcnow()
         end_time = start_time + timedelta(seconds=90)
         active_challenges[chat_id] = {
@@ -313,6 +322,8 @@ async def run_group_challenges(chat_id: int):
 async def handle_challenge_reply(message: types.Message):
     if not message.reply_to_message:
         return
+    if not await check_bot_admin(chat_id, message):
+    return
     chat_id = message.chat.id
     if chat_id not in active_challenges:
         return
@@ -342,6 +353,8 @@ async def handle_challenge_reply(message: types.Message):
         
 # بخش اضافی برای اجرای ماموریت‌ها و اهدا جایزه
 async def check_mission_completion(chat_id: int):
+    if not await check_bot_admin(chat_id, message=None):
+        continue
     missions = await db.fetchall("SELECT * FROM group_missions WHERE chat_id=$1 AND status='pending'", (chat_id,))
     for mission in missions:
         # مثال ساده: چک کنیم اگر ماموریت تکمیل شده باشد، کاربر مشخص برنده شود
@@ -406,6 +419,7 @@ if __name__ == "__main__":
         asyncio.run(main())
     except (KeyboardInterrupt, SystemExit):
         print("Bot stopped!")
+
 
 
 
