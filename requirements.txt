@@ -1,3 +1,2 @@
-aiogram==3.1.0
-aiosqlite>=0.18.0
-asyncpg>=0.27.0
+asyncpg
+aiogram
