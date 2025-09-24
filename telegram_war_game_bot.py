@@ -44,9 +44,10 @@ class DBAdapter:
 
 db = DBAdapter(DATABASE_URL)
 
-# ------------------ DB Init ------------------
+# ------------------ DB Init Safe ------------------
 async def init_db():
     await db.init()
+    
     # Users
     await db.execute("""
     CREATE TABLE IF NOT EXISTS users (
@@ -62,6 +63,20 @@ async def init_db():
         has_initial_rig INTEGER DEFAULT 0
     )
     """)
+    # اطمینان از ستون‌ها
+    existing_cols = await db.fetchall("""
+        SELECT column_name
+        FROM information_schema.columns
+        WHERE table_name='users';
+    """)
+    cols = [r["column_name"] for r in existing_cols]
+    if "experience" not in cols:
+        await db.execute("ALTER TABLE users ADD COLUMN experience INTEGER DEFAULT 0")
+    if "level" not in cols:
+        await db.execute("ALTER TABLE users ADD COLUMN level INTEGER DEFAULT 1")
+    if "has_initial_rig" not in cols:
+        await db.execute("ALTER TABLE users ADD COLUMN has_initial_rig INTEGER DEFAULT 0")
+
     # Oil rigs
     await db.execute("""
     CREATE TABLE IF NOT EXISTS oil_rigs (
@@ -374,5 +389,6 @@ if __name__ == "__main__":
         asyncio.run(main())
     except (KeyboardInterrupt, SystemExit):
         print("Bot stopped!")
+
 
 
