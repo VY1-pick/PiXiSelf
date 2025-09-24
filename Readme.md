@@ -62,8 +62,8 @@
 
 1. **کلون کردن پروژه**
    ```bash
-   git clone <YOUR_REPO_URL>
-   cd <YOUR_REPO_NAME>
+   git clone https://github.com/VY1-pick/PiXiSelf
+   cd PiXiSelf
    ```
 
 2. **تنظیم متغیرهای محیطی**
