@@ -254,12 +254,13 @@ async def run_group_challenges(chat_id: int):
             "message_id": msg.message_id,
             "start_time": start_time,
             "end_time": end_time,
-            "answered": False
+            "answered_by": None
         }
 
         await db.execute(
-            "INSERT INTO group_challenges(chat_id, challenge_id, message_id, start_time, end_time, active) VALUES($1,$2,$3,$4,$5,$6) "
-            "ON CONFLICT (chat_id) DO UPDATE SET challenge_id=$2, message_id=$3, start_time=$4, end_time=$5, active=$6",
+            "INSERT INTO group_challenges(chat_id, challenge_id, message_id, start_time, end_time, active) "
+            "VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT (chat_id) DO UPDATE SET "
+            "challenge_id=$2, message_id=$3, start_time=$4, end_time=$5, active=$6",
             (chat_id, challenge['id'], msg.message_id, start_time, end_time, 1)
         )
 
@@ -273,7 +274,7 @@ async def run_group_challenges(chat_id: int):
 
         # پایان چالش
         info = active_challenges.pop(chat_id, None)
-        if info and not info["answered"]:
+        if info and not info["answered_by"]:
             await msg.edit_text(f"فرمانده: زمان چالش به پایان رسید!\nپاسخ صحیح: {challenge['answer']}")
 
 @dp.message()
@@ -286,17 +287,26 @@ async def handle_challenge_reply(message: types.Message):
     info = active_challenges[chat_id]
     if message.reply_to_message.message_id != info["message_id"]:
         return
+    if info["answered_by"] is not None:
+        # کسی قبلاً پاسخ صحیح داده، هیچ جایزه‌ای داده نشود
+        return
+
     challenge = info["challenge"]
     if message.text.strip().lower() == challenge["answer"].strip().lower():
-        info["answered"] = True
+        info["answered_by"] = message.from_user.id
         reward_money = challenge["reward_money"]
         reward_oil = challenge["reward_oil"]
-        await db.execute("UPDATE users SET money_amount = money_amount + $1, oil_amount = oil_amount + $2 WHERE user_id=$3",
-                         (reward_money, reward_oil, message.from_user.id))
+        await db.execute(
+            "UPDATE users SET money_amount = money_amount + $1, oil_amount = oil_amount + $2 WHERE user_id=$3",
+            (reward_money, reward_oil, message.from_user.id)
+        )
         await message.reply(f"فرمانده: تبریک سرباز {message.from_user.username}! 🎉\n"
                             f"جوایز شما: 💰 {reward_money}, 🛢️ {reward_oil}")
-        await bot.edit_message_text(chat_id=chat_id, message_id=info["message_id"],
-                                    text=f"چالش: {challenge['text']}\n✅ پاسخ صحیح داده شد توسط {message.from_user.username}")
+        await bot.edit_message_text(
+            chat_id=chat_id,
+            message_id=info["message_id"],
+            text=f"چالش: {challenge['text']}\n✅ پاسخ صحیح داده شد توسط {message.from_user.username}\n⏱ زمان باقی‌مانده: {(info['end_time'] - datetime.utcnow()).seconds} ثانیه"
+        )
         
 # بخش اضافی برای اجرای ماموریت‌ها و اهدا جایزه
 async def check_mission_completion(chat_id: int):
@@ -364,4 +374,5 @@ if __name__ == "__main__":
         asyncio.run(main())
     except (KeyboardInterrupt, SystemExit):
         print("Bot stopped!")
+
 
