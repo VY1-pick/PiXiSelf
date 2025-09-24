@@ -1,2 +1,2 @@
-asyncpg
-aiogram
+aiogram==3.1.2
+asyncpg==1.0.2
