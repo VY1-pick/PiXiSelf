@@ -177,10 +177,18 @@ async def get_user_inventory(user_id: int) -> Optional[str]:
         f"📊 پیشرفت سطح: [{bar}]"
     )
 
-async def is_bot_admin(chat_id: int) -> bool:
+# چک کردن ادمین بودن ربات قبل از پاسخ به درخواست‌ها
+async def check_bot_admin(chat_id: int, cb_or_msg):
     me = await bot.get_me()
     member = await bot.get_chat_member(chat_id, me.id)
-    return member.status in ("administrator", "creator")
+    if member.status not in ("administrator", "creator"):
+        # اگه callback باشه
+        if isinstance(cb_or_msg, types.CallbackQuery):
+            await cb_or_msg.answer("⚠️ فرمانده در جایگاه خودش نیست و نمی‌تواند به شما رسیدگی کند!", show_alert=True)
+        else:
+            await cb_or_msg.answer("⚠️ فرمانده در جایگاه خودش نیست و نمی‌تواند به شما رسیدگی کند!")
+        return False
+    return True
 
 async def get_common_groups(user_id: int) -> list[Tuple[int, str]]:
     rows = await db.fetchall("SELECT chat_id, title FROM groups")
@@ -192,12 +200,21 @@ async def cmd_start(message: types.Message):
     await ensure_user(message.from_user)
     username = message.from_user.username or message.from_user.first_name
     groups = await get_common_groups(message.from_user.id)
+    
     if not groups:
         kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="✅ انجام شد فرمانده", callback_data="done_add_group")]
+            [
+                InlineKeyboardButton(text="✅ انجام شد فرمانده", callback_data="done_add_group"),
+                InlineKeyboardButton(text="➕ افزودن به گروه", url="https://t.me/kkknbbot?startgroup=true")
+            ]
         ])
-        await message.answer(f"فرمانده:\n سرباز {username}، می‌بینم که هنوز ربات رو به گروهت اضافه نکردی 😡", reply_markup=kb)
+        await message.answer(
+            f"فرمانده:\nسرباز {username}، می‌بینم که هنوز ربات رو به گروهت اضافه نکردی 😡\n"
+            "برای شروع بازی، لطفاً ربات را به گروهت اضافه کن و فرمانده را ادمین قرار بده.",
+            reply_markup=kb
+        )
         return
+    
     await show_panel(message, username, None)
 
 @dp.callback_query(lambda cb: cb.data == "done_add_group")
@@ -389,6 +406,7 @@ if __name__ == "__main__":
         asyncio.run(main())
     except (KeyboardInterrupt, SystemExit):
         print("Bot stopped!")
+
 
 
 
