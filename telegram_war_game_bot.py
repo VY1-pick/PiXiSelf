@@ -2,11 +2,11 @@
 # Python 3.11+
 import os
 import asyncio
-from typing import Optional, Tuple, Any
+from typing import Optional, Tuple
 
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import CommandStart
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
 
 # DB drivers
 import aiosqlite
@@ -16,9 +16,6 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 if not BOT_TOKEN:
     raise RuntimeError("BOT_TOKEN environment variable is required")
 
-# DATABASE_URL examples:
-# - sqlite (default): sqlite:///game.db
-# - postgres: postgres://user:pass@host:port/dbname
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///game.db")
 
 bot = Bot(token=BOT_TOKEN)
@@ -32,18 +29,12 @@ class DBAdapter:
         self._pg_pool: Optional[asyncpg.Pool] = None
 
     async def init(self):
-        if self._mode == "sqlite":
-            # nothing to init besides ensuring path exists at connect time
-            pass
-        else:
-            # create pg pool
+        if self._mode == "postgres":
             self._pg_pool = await asyncpg.create_pool(dsn=self.database_url, min_size=1, max_size=10)
 
     def _sqlite_path(self) -> str:
-        # DATABASE_URL like sqlite:///game.db or sqlite:////absolute/path/to/game.db
         parts = self.database_url.split("://", 1)
         path = parts[1] if len(parts) > 1 else "game.db"
-        # for typical sqlite:///game.db -> path starts with /game.db, remove leading slash
         if path.startswith("/") and not self.database_url.startswith("sqlite:////"):
             path = path[1:]
         return path
@@ -80,10 +71,9 @@ class DBAdapter:
 
 db = DBAdapter(DATABASE_URL)
 
-# ------------------ DB init (tables) ------------------
+# ------------------ DB init ------------------
 async def init_db():
     await db.init()
-    # Create tables compatible with both SQLite and Postgres
     await db.execute("""
     CREATE TABLE IF NOT EXISTS groups (
         chat_id BIGINT PRIMARY KEY,
@@ -112,12 +102,11 @@ async def init_db():
         hp INTEGER,
         capacity INTEGER,
         extraction_speed DOUBLE PRECISION,
-        invulnerable INTEGER DEFAULT 0,
-        FOREIGN KEY(owner_id) REFERENCES users(user_id) ON DELETE CASCADE
+        invulnerable INTEGER DEFAULT 0
     )
     """)
 
-# ------------------ helpers ------------------
+# ------------------ Helpers ------------------
 async def ensure_user(user: types.User) -> bool:
     """Return True if new user created (and initial rig given)."""
     if db._mode == "postgres":
@@ -125,11 +114,10 @@ async def ensure_user(user: types.User) -> bool:
     else:
         row = await db.fetchone("SELECT has_initial_rig FROM users WHERE user_id = ?", (user.id,))
     if row is None:
-        currency = "USD"
         if db._mode == "postgres":
             await db.execute(
                 "INSERT INTO users(user_id, username, first_name, last_name, money_amount, money_currency, oil_amount, level, has_initial_rig) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)",
-                (user.id, user.username or "", user.first_name or "", user.last_name or "", 100.0, currency, 100.0, 1, 1)
+                (user.id, user.username or "", user.first_name or "", user.last_name or "", 100.0, "USD", 100.0, 1, 1)
             )
             await db.execute(
                 "INSERT INTO oil_rigs(owner_id, level, hp, capacity, extraction_speed, invulnerable) VALUES($1,$2,$3,$4,$5,$6)",
@@ -138,19 +126,46 @@ async def ensure_user(user: types.User) -> bool:
         else:
             await db.execute(
                 "INSERT INTO users(user_id, username, first_name, last_name, money_amount, money_currency, oil_amount, level, has_initial_rig) VALUES(?,?,?,?,?,?,?,?,?)",
-                (user.id, user.username or "", user.first_name or "", user.last_name or "", 100.0, currency, 100.0, 1, 1)
+                (user.id, user.username or "", user.first_name or "", user.last_name or "", 100.0, "USD", 100.0, 1, 1)
             )
             await db.execute(
                 "INSERT INTO oil_rigs(owner_id, level, hp, capacity, extraction_speed, invulnerable) VALUES(?,?,?,?,?,?)",
                 (user.id, 1, 1000, 100, 1.0, 1)
             )
         return True
-    else:
-        return False
+    return False
 
 async def bot_groups_exist() -> bool:
     cnt = await db.fetchval("SELECT COUNT(*) FROM groups")
     return (cnt or 0) > 0
+
+async def is_bot_admin(chat_id: int) -> bool:
+    me = await bot.get_me()
+    member = await bot.get_chat_member(chat_id, me.id)
+    return member.status in ("administrator", "creator")
+
+async def get_user_inventory(user_id: int) -> Optional[str]:
+    if db._mode == "postgres":
+        user = await db.fetchone("SELECT money_amount, money_currency, oil_amount, level FROM users WHERE user_id=$1", (user_id,))
+    else:
+        user = await db.fetchone("SELECT money_amount, money_currency, oil_amount, level FROM users WHERE user_id=?", (user_id,))
+    if not user:
+        return None
+    
+    money, currency, oil, level = user
+    if db._mode == "postgres":
+        rigs = await db.fetchone("SELECT COUNT(*), MIN(level), MAX(level) FROM oil_rigs WHERE owner_id=$1", (user_id,))
+    else:
+        rigs = await db.fetchone("SELECT COUNT(*), MIN(level), MAX(level) FROM oil_rigs WHERE owner_id=?", (user_id,))
+    
+    rigs_count, rigs_min, rigs_max = rigs or (0, None, None)
+    return (
+        f"💰 پول: {money} {currency}\n"
+        f"🛢️ نفت: {oil}\n"
+        f"🏗️ دکل‌ها: {rigs_count} (سطح {rigs_min} تا {rigs_max})\n"
+        f"🛩️ جنگنده‌ها: 0 (فعلاً)\n"
+        f"🎖️ سطح بازیکن: {level}"
+    )
 
 # ------------------ Handlers ------------------
 @dp.message(CommandStart())
@@ -162,11 +177,10 @@ async def cmd_start(message: types.Message):
         "🎮 خوش اومدی به بازی استراتژی-اکشن گروهی!\n\n"
         "📌 توضیح کوتاه:\n"
         "- هر بازیکن یک کشور انتخاب می‌کند (اسم کشور قابل تغییر).\n"
-        "- تجهیزات اولیه: جنگنده و موشک (برای بتا). همه قدرت‌ها یکسان اما نام‌ها متفاوتند.\n"
-        "- منابع: پول و نفت (بعداً طلا/الماس اضافه میشه).\n"
-        "- پول بر اساس ارز کشور نمایش داده میشه — اما مقدار پایه برابر است.\n"
-        "- هر بازیکن در شروع یک دکل نفت سطح ۱ **غیرقابل تخریب** دریافت می‌کند.\n\n"
-        "برای تجربه گروهی: لطفاً ربات را به یک گروه اضافه کنید و بازی را از آنجا ادامه دهید."
+        "- تجهیزات اولیه: جنگنده و موشک (برای بتا).\n"
+        "- منابع: پول و نفت.\n"
+        "- هر بازیکن یک دکل نفت سطح ۱ **غیرقابل تخریب** دریافت می‌کند.\n\n"
+        "برای تجربه گروهی: لطفاً ربات را به یک گروه اضافه کنید."
     )
 
     if message.chat.type == "private":
@@ -175,21 +189,59 @@ async def cmd_start(message: types.Message):
         if not groups_exist:
             add_link = f"https://t.me/{bot_username}?startgroup=true"
             kb = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="اضافه کردن ربات به گروه ➕", url=add_link)],
-                [InlineKeyboardButton(text="راهنمای سریع", callback_data="help_quick")]
+                [InlineKeyboardButton(text="➕ اضافه کردن ربات به گروه", url=add_link)],
+                [InlineKeyboardButton(text="📖 راهنمای سریع", callback_data="help_quick")]
             ])
             await message.answer(
-                "سلام! من ربات بازی گروهی هستم. برای اجرای بازی در گروه‌ها، لطفاً من را به یک گروه اضافه کنید.\n\n"
-                "وقتی ربات به گروه اضافه شد، سیستم به شما دکل نفت سطح ۱ غیرقابل تخریب می‌دهد (اگر هنوز نگرفته باشید).",
+                "سلام! برای اجرای بازی در گروه‌ها، ربات را به یک گروه اضافه کنید.\n\n"
+                "وقتی اضافه شد، شما یک دکل نفت سطح ۱ غیرقابل تخریب خواهید داشت.",
                 reply_markup=kb
             )
         else:
             if is_new:
-                await message.answer(game_summary + "\n\n✅ شما اکنون یک دکل نفت سطح ۱ (غیرقابل تخریب) دریافت کرده‌اید — موفق باشید!")
+                await message.answer(game_summary + "\n\n✅ شما یک دکل نفت سطح ۱ (غیرقابل تخریب) دریافت کردید!")
             else:
-                await message.answer(game_summary + "\n\n🔔 شما قبلاً به بازی معرفی شده‌اید. اگر می‌خواهید بازی را از گروه شروع کنید، ربات را به گروه اضافه کنید یا داخل گروه فرمان‌ها را اجرا کنید.")
+                await message.answer(game_summary + "\n\n🔔 شما قبلاً ثبت‌نام کرده‌اید.")
     else:
-        await message.reply("ربات بازی فعال شد — اینجا بازی گروهی اجرا می‌شود. هر کاربر با /start در خصوصی می‌تواند خلاصه و دکل شروع را دریافت کند.")
+        await message.reply("✅ ربات در این گروه فعال شد.")
+
+# پنل کاربری
+@dp.message(commands=["panel"])
+async def panel_cmd(message: types.Message):
+    if message.chat.type != "private":
+        return
+    kb = ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="📊 موجودی")],
+            [KeyboardButton(text="🛒 فروشگاه"), KeyboardButton(text="💱 تبادل")],
+            [KeyboardButton(text="🏗️ دکل‌ها"), KeyboardButton(text="🛩️ آشیانه‌ها")],
+            [KeyboardButton(text="🌍 گروه سراری")]
+        ],
+        resize_keyboard=True
+    )
+    await message.answer("🔧 پنل کاربری:", reply_markup=kb)
+
+# موجودی در پیوی
+@dp.message(lambda msg: msg.chat.type == "private" and msg.text == "📊 موجودی")
+async def inventory_private(message: types.Message):
+    data = await get_user_inventory(message.from_user.id)
+    if data:
+        await message.answer("📊 موجودی کامل شما:\n\n" + data)
+    else:
+        await message.answer("❌ شما هنوز وارد بازی نشده‌اید. لطفاً /start بزنید.")
+
+# موجودی در گروه
+@dp.message(lambda msg: msg.chat.type in ("group", "supergroup") and msg.text.lower() == "موجودی")
+async def inventory_group(message: types.Message):
+    if not await is_bot_admin(message.chat.id):
+        await message.reply("⚠️ برای استفاده از ربات، باید ربات ادمین گروه باشد.")
+        return
+    
+    data = await get_user_inventory(message.from_user.id)
+    if data:
+        lines = data.split("\n")
+        summary = "\n".join(lines[:2])  # پول و نفت
+        await message.reply("📊 موجودی شما:\n" + summary)
 
 @dp.my_chat_member()
 async def my_chat_member_updated(event: types.ChatMemberUpdated):
@@ -198,25 +250,24 @@ async def my_chat_member_updated(event: types.ChatMemberUpdated):
     if db._mode == "postgres":
         if new_status in ("member","administrator","creator"):
             await db.execute(
-                "INSERT INTO groups(chat_id, title, username) VALUES($1,$2,$3) ON CONFLICT (chat_id) DO UPDATE SET title = $2, username = $3",
+                "INSERT INTO groups(chat_id, title, username) VALUES($1,$2,$3) ON CONFLICT (chat_id) DO UPDATE SET title=$2, username=$3",
                 (chat.id, chat.title or "", chat.username or "")
             )
         else:
-            await db.execute("DELETE FROM groups WHERE chat_id = $1", (chat.id,))
+            await db.execute("DELETE FROM groups WHERE chat_id=$1", (chat.id,))
     else:
         if new_status in ("member","administrator","creator"):
             await db.execute("INSERT OR REPLACE INTO groups(chat_id, title, username) VALUES(?,?,?)", (chat.id, chat.title or "", chat.username or ""))
         else:
-            await db.execute("DELETE FROM groups WHERE chat_id = ?", (chat.id,))
+            await db.execute("DELETE FROM groups WHERE chat_id=?", (chat.id,))
 
 @dp.callback_query(lambda c: c.data == "help_quick")
 async def _help_quick(cb: types.CallbackQuery):
     await cb.message.answer(
         "راهنمای سریع:\n"
-        "1. ربات را با دکمه «اضافه کردن ربات به گروه» به گروه اضافه کنید.\n"
-        "2. بعد از اضافه شدن ربات، در گروه از دستورالعمل‌های بازی استفاده خواهد شد.\n"
-        "3. بازیکنان برای شروع باید در چت خصوصی /start را بزنند تا دکل و پروفایل‌شان ساخته شود.\n\n"
-        "من آماده‌ام که بخش‌های بعدی (خرید جنگنده/موشک، حمله، سوالات تصادفی، ماموریت‌ها و غیره) را با هم پیاده‌سازی کنیم."
+        "1. ربات را با دکمه «➕ اضافه کردن ربات به گروه» به گروه اضافه کنید.\n"
+        "2. بعد از اضافه شدن، بازیکنان باید در خصوصی /start بزنند.\n"
+        "3. سپس می‌توانید در گروه با دستورات بازی کنید."
     )
     await cb.answer()
 
@@ -233,4 +284,3 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-
