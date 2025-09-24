@@ -169,7 +169,7 @@ async def cmd_start(message: types.Message):
         "برای تجربه گروهی: لطفاً ربات را به یک گروه اضافه کنید و بازی را از آنجا ادامه دهید."
     )
 
-    if message.chat.type == types.ChatType.PRIVATE:
+    if message.chat.type == "private":
         is_new = await ensure_user(message.from_user)
         groups_exist = await bot_groups_exist()
         if not groups_exist:
@@ -233,3 +233,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
