@@ -323,7 +323,7 @@ async def handle_challenge_reply(message: types.Message):
     if not message.reply_to_message:
         return
     if not await check_bot_admin(chat_id, message):
-    return
+        return
     chat_id = message.chat.id
     if chat_id not in active_challenges:
         return
@@ -419,6 +419,7 @@ if __name__ == "__main__":
         asyncio.run(main())
     except (KeyboardInterrupt, SystemExit):
         print("Bot stopped!")
+
 
 
 
