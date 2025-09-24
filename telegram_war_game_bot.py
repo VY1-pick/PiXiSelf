@@ -91,6 +91,7 @@ async def init_db():
         money_currency TEXT DEFAULT 'USD',
         oil_amount DOUBLE PRECISION DEFAULT 100.0,
         level INTEGER DEFAULT 1,
+        exp INTEGER DEFAULT 0,
         has_initial_rig INTEGER DEFAULT 0
     )
     """)
@@ -116,8 +117,8 @@ async def ensure_user(user: types.User) -> bool:
     if row is None:
         if db._mode == "postgres":
             await db.execute(
-                "INSERT INTO users(user_id, username, first_name, last_name, money_amount, money_currency, oil_amount, level, has_initial_rig) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)",
-                (user.id, user.username or "", user.first_name or "", user.last_name or "", 100.0, "USD", 100.0, 1, 1)
+                "INSERT INTO users(user_id, username, first_name, last_name, money_amount, money_currency, oil_amount, level, exp, has_initial_rig) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)",
+                (user.id, user.username or "", user.first_name or "", user.last_name or "", 100.0, "USD", 100.0, 1, 0, 1)
             )
             await db.execute(
                 "INSERT INTO oil_rigs(owner_id, level, hp, capacity, extraction_speed, invulnerable) VALUES($1,$2,$3,$4,$5,$6)",
@@ -125,8 +126,8 @@ async def ensure_user(user: types.User) -> bool:
             )
         else:
             await db.execute(
-                "INSERT INTO users(user_id, username, first_name, last_name, money_amount, money_currency, oil_amount, level, has_initial_rig) VALUES(?,?,?,?,?,?,?,?,?)",
-                (user.id, user.username or "", user.first_name or "", user.last_name or "", 100.0, "USD", 100.0, 1, 1)
+                "INSERT INTO users(user_id, username, first_name, last_name, money_amount, money_currency, oil_amount, level, exp, has_initial_rig) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                (user.id, user.username or "", user.first_name or "", user.last_name or "", 100.0, "USD", 100.0, 1, 0, 1)
             )
             await db.execute(
                 "INSERT INTO oil_rigs(owner_id, level, hp, capacity, extraction_speed, invulnerable) VALUES(?,?,?,?,?,?)",
@@ -144,15 +145,27 @@ async def is_bot_admin(chat_id: int) -> bool:
     member = await bot.get_chat_member(chat_id, me.id)
     return member.status in ("administrator", "creator")
 
+def next_level_exp(level: int) -> int:
+    """تجربه لازم برای رسیدن به سطح بعدی"""
+    return 25 * level ** 2 + 50 * level  # فرمول ساده
+
+def exp_bar(exp: int, next_level: int, size: int = 10) -> str:
+    filled = int((exp / next_level) * size)
+    empty = size - filled
+    return "█" * filled + "░" * empty
+
 async def get_user_inventory(user_id: int) -> Optional[str]:
     if db._mode == "postgres":
-        user = await db.fetchone("SELECT money_amount, money_currency, oil_amount, level FROM users WHERE user_id=$1", (user_id,))
+        user = await db.fetchone("SELECT money_amount, money_currency, oil_amount, level, exp FROM users WHERE user_id=$1", (user_id,))
     else:
-        user = await db.fetchone("SELECT money_amount, money_currency, oil_amount, level FROM users WHERE user_id=?", (user_id,))
+        user = await db.fetchone("SELECT money_amount, money_currency, oil_amount, level, exp FROM users WHERE user_id=?", (user_id,))
     if not user:
         return None
     
-    money, currency, oil, level = user
+    money, currency, oil, level, exp = user
+    next_exp = next_level_exp(level)
+    bar = exp_bar(exp, next_exp, size=10)
+
     if db._mode == "postgres":
         rigs = await db.fetchone("SELECT COUNT(*), MIN(level), MAX(level) FROM oil_rigs WHERE owner_id=$1", (user_id,))
     else:
@@ -164,7 +177,8 @@ async def get_user_inventory(user_id: int) -> Optional[str]:
         f"🛢️ نفت: {oil}\n"
         f"🏗️ دکل‌ها: {rigs_count} (سطح {rigs_min} تا {rigs_max})\n"
         f"🛩️ جنگنده‌ها: 0 (فعلاً)\n"
-        f"🎖️ سطح بازیکن: {level}"
+        f"🎖️ سطح: {level}\n"
+        f"✨ سطح تجربه: {level} \n[{bar}] ({exp} / {next_exp} تجربه)"
     )
 
 # ------------------ Handlers ------------------
@@ -201,7 +215,7 @@ async def cmd_start(message: types.Message):
             if is_new:
                 await message.answer(game_summary + "\n\n✅ شما یک دکل نفت سطح ۱ (غیرقابل تخریب) دریافت کردید!")
             else:
-                await message.answer(game_summary + "\n\n🔔 شما قبلاً ثبت‌نام کرده‌اید.")
+                await message.answer(game_summary + "\n\n🔔 شما قبلاً ثبت‌نام کرده‌اید، برای نمایش پنل از /panel استفاده کنید")
     else:
         await message.reply("✅ ربات در این گروه فعال شد.")
 
@@ -240,9 +254,11 @@ async def inventory_group(message: types.Message):
     data = await get_user_inventory(message.from_user.id)
     if data:
         lines = data.split("\n")
-        summary = "\n".join(lines[:2])  # پول و نفت
+        summary = "\n".join(lines[:2])  # فقط پول و نفت برای گروه
+        summary += f"\n🎖️ سطح: {lines[4]}\n{lines[5]}"  # سطح و نوار تجربه
         await message.reply("📊 موجودی شما:\n" + summary)
 
+# ------------------ Callbacks ------------------
 @dp.my_chat_member()
 async def my_chat_member_updated(event: types.ChatMemberUpdated):
     chat = event.chat
