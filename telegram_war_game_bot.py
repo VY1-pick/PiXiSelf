@@ -5,7 +5,7 @@ import asyncio
 from typing import Optional, Tuple
 
 from aiogram import Bot, Dispatcher, types
-from aiogram.filters import CommandStart
+from aiogram.filters import Command
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
 
 # DB drivers
@@ -168,7 +168,7 @@ async def get_user_inventory(user_id: int) -> Optional[str]:
     )
 
 # ------------------ Handlers ------------------
-@dp.message(CommandStart())
+@dp.message(Command("start"))
 async def cmd_start(message: types.Message):
     me = await bot.get_me()
     bot_username = me.username or "YOUR_BOT_USERNAME"
@@ -206,7 +206,7 @@ async def cmd_start(message: types.Message):
         await message.reply("✅ ربات در این گروه فعال شد.")
 
 # پنل کاربری
-@dp.message(commands=["panel"])
+@dp.message(Command("panel"))
 async def panel_cmd(message: types.Message):
     if message.chat.type != "private":
         return
