@@ -196,7 +196,7 @@ async def cmd_start(message: types.Message):
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="✅ انجام شد فرمانده", callback_data="done_add_group")]
         ])
-        await message.answer(f"فرمانده: سرباز {username}، می‌بینم که هنوز ربات رو به گروهت اضافه نکردی 😡", reply_markup=kb)
+        await message.answer(f"فرمانده:\n سرباز {username}، می‌بینم که هنوز ربات رو به گروهت اضافه نکردی 😡", reply_markup=kb)
         return
     await show_panel(message, username, None)
 
@@ -205,12 +205,12 @@ async def done_add_group(cb: types.CallbackQuery):
     username = cb.from_user.username or cb.from_user.first_name
     groups = await get_common_groups(cb.from_user.id)
     if not groups:
-        await cb.message.answer(f"فرمانده: سرباز {username}، گروه مشترک پیدا نشد! مطمئن شو که ربات در گروه اضافه شده است ⚠️")
+        await cb.message.answer(f"فرمانده:\n سرباز {username}، گروه مشترک پیدا نشد! مطمئن شو که ربات در گروه اضافه شده است ⚠️")
         return
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=title, callback_data=f"group_{chat_id}")] for chat_id, title in groups
     ])
-    await cb.message.answer(f"فرمانده: سرباز {username}، انتخاب کن در کدام گروه پروفایلت فعال شود. فرمانده مراقب توست 👀", reply_markup=kb)
+    await cb.message.answer(f"فرمانده:\n سرباز {username}، انتخاب کن در کدام گروه پروفایلت فعال شود. فرمانده مراقب توست 👀", reply_markup=kb)
 
 @dp.callback_query(lambda cb: cb.data.startswith("group_"))
 async def select_group(cb: types.CallbackQuery):
@@ -232,15 +232,15 @@ async def show_panel(message: types.Message, username: str, chat_id: Optional[in
          InlineKeyboardButton(text="🛩️ آشیانه‌ها", callback_data="hangars")],
         [InlineKeyboardButton(text="🌍 گروه سراری", callback_data="guilds")]
     ])
-    await message.answer(f"فرمانده: سرباز {username}، پنل وضعیتت آماده است. دقت کن هر حرکتت ثبت می‌شود ⚔️", reply_markup=kb)
+    await message.answer(f"فرمانده:\n سرباز {username}، پنل وضعیتت آماده است. دقت کن هر حرکتت ثبت می‌شود ⚔️", reply_markup=kb)
 
 @dp.callback_query(lambda cb: cb.data == "inventory")
 async def callback_inventory(cb: types.CallbackQuery):
     data = await get_user_inventory(cb.from_user.id)
     if data:
-        await cb.message.edit_text(f"فرمانده: {cb.from_user.username}, موجودی شما:\n\n{data}", reply_markup=cb.message.reply_markup)
+        await cb.message.edit_text(f"فرمانده:\n {cb.from_user.username}, موجودی شما:\n\n{data}", reply_markup=cb.message.reply_markup)
     else:
-        await cb.message.answer(f"فرمانده: سرباز {cb.from_user.username}، شما هنوز وارد بازی نشده‌اید. لطفاً /start بزنید.")
+        await cb.message.answer(f"فرمانده:\n سرباز {cb.from_user.username}، شما هنوز وارد بازی نشده‌اید. لطفاً /start بزنید.")
 
 @dp.callback_query(lambda cb: cb.data in ("shop","exchange","rigs","hangars","guilds"))
 async def callback_other(cb: types.CallbackQuery):
@@ -261,7 +261,7 @@ async def run_group_challenges(chat_id: int):
         if not challenge:
             continue
 
-        msg = await bot.send_message(chat_id, f"فرمانده: سربازان! آماده باشید ⚔️\n\nچالش: {challenge['text']}\n⏱ زمان: 90 ثانیه")
+        msg = await bot.send_message(chat_id, f"فرمانده:\n سربازان! آماده باشید ⚔️\n\nچالش: {challenge['text']}\n⏱ زمان: 90 ثانیه")
         start_time = datetime.utcnow()
         end_time = start_time + timedelta(seconds=90)
         active_challenges[chat_id] = {
@@ -282,7 +282,7 @@ async def run_group_challenges(chat_id: int):
         # Timer
         for remaining in range(90, 0, -1):
             try:
-                await msg.edit_text(f"فرمانده: سربازان! آماده باشید ⚔️\n\nچالش: {challenge['text']}\n⏱ زمان: {remaining} ثانیه")
+                await msg.edit_text(f"فرمانده:\n سربازان! آماده باشید ⚔️\n\nچالش: {challenge['text']}\n⏱ زمان: {remaining} ثانیه")
             except:
                 break
             await asyncio.sleep(1)
@@ -290,7 +290,7 @@ async def run_group_challenges(chat_id: int):
         # پایان چالش
         info = active_challenges.pop(chat_id, None)
         if info and not info["answered_by"]:
-            await msg.edit_text(f"فرمانده: زمان چالش به پایان رسید!\nپاسخ صحیح: {challenge['answer']}")
+            await msg.edit_text(f"فرمانده:\n زمان چالش به پایان رسید!\nپاسخ صحیح: {challenge['answer']}")
 
 @dp.message()
 async def handle_challenge_reply(message: types.Message):
@@ -315,7 +315,7 @@ async def handle_challenge_reply(message: types.Message):
             "UPDATE users SET money_amount = money_amount + $1, oil_amount = oil_amount + $2 WHERE user_id=$3",
             (reward_money, reward_oil, message.from_user.id)
         )
-        await message.reply(f"فرمانده: تبریک سرباز {message.from_user.username}! 🎉\n"
+        await message.reply(f"فرمانده:\n تبریک سرباز {message.from_user.username}! 🎉\n"
                             f"جوایز شما: 💰 {reward_money}, 🛢️ {reward_oil}")
         await bot.edit_message_text(
             chat_id=chat_id,
@@ -348,7 +348,7 @@ async def check_mission_completion(chat_id: int):
             # ارسال پیام در گروه
             await bot.send_message(
                 chat_id,
-                f"فرمانده: سرباز {user['username']} ماموریت `{mission['mission_id']}` را تکمیل کرد! 🎖️\n"
+                f"فرمانده:\n سرباز {user['username']} ماموریت `{mission['mission_id']}` را تکمیل کرد! 🎖️\n"
                 f"جوایز: 💰 {reward_money}, 🛢️ {reward_oil}"
             )
 
@@ -389,6 +389,7 @@ if __name__ == "__main__":
         asyncio.run(main())
     except (KeyboardInterrupt, SystemExit):
         print("Bot stopped!")
+
 
 
 
