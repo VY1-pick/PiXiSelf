@@ -6,7 +6,7 @@ from typing import Optional, Tuple
 
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 # DB drivers
 import aiosqlite
@@ -163,8 +163,8 @@ async def get_user_inventory(user_id: int) -> Optional[str]:
         return None
     
     money, currency, oil, level, exp = user
-    next_exp = next_level_exp(level)
-    bar = exp_bar(exp, next_exp, size=10)
+    next_exp_val = next_level_exp(level)
+    bar = exp_bar(exp, next_exp_val, size=10)
 
     if db._mode == "postgres":
         rigs = await db.fetchone("SELECT COUNT(*), MIN(level), MAX(level) FROM oil_rigs WHERE owner_id=$1", (user_id,))
@@ -178,7 +178,7 @@ async def get_user_inventory(user_id: int) -> Optional[str]:
         f"🏗️ دکل‌ها: {rigs_count} (سطح {rigs_min} تا {rigs_max})\n"
         f"🛩️ جنگنده‌ها: 0 (فعلاً)\n"
         f"🎖️ سطح: {level}\n"
-        f"✨ سطح تجربه: {level} \n[{bar}] ({exp} / {next_exp} تجربه)"
+        f"✨ سطح تجربه: {level} \n[{bar}] ({exp} / {next_exp_val} تجربه)"
     )
 
 # ------------------ Handlers ------------------
@@ -187,6 +187,10 @@ async def cmd_start(message: types.Message):
     me = await bot.get_me()
     bot_username = me.username or "YOUR_BOT_USERNAME"
 
+    # بررسی اینکه کاربر جدید هست یا نه
+    is_new = await ensure_user(message.from_user)
+
+    # متن خوش آمد
     game_summary = (
         "🎮 خوش اومدی به بازی استراتژی-اکشن گروهی!\n\n"
         "📌 توضیح کوتاه:\n"
@@ -194,98 +198,33 @@ async def cmd_start(message: types.Message):
         "- تجهیزات اولیه: جنگنده و موشک (برای بتا).\n"
         "- منابع: پول و نفت.\n"
         "- هر بازیکن یک دکل نفت سطح ۱ **غیرقابل تخریب** دریافت می‌کند.\n\n"
-        "برای تجربه گروهی: لطفاً ربات را به یک گروه اضافه کنید."
+        "پنل شیشه‌ای شما در ادامه قرار دارد:"
     )
 
-    if message.chat.type == "private":
-        is_new = await ensure_user(message.from_user)
-        groups_exist = await bot_groups_exist()
-        if not groups_exist:
-            add_link = f"https://t.me/{bot_username}?startgroup=true"
-            kb = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="➕ اضافه کردن ربات به گروه", url=add_link)],
-                [InlineKeyboardButton(text="📖 راهنمای سریع", callback_data="help_quick")]
-            ])
-            await message.answer(
-                "سلام! برای اجرای بازی در گروه‌ها، ربات را به یک گروه اضافه کنید.\n\n"
-                "وقتی اضافه شد، شما یک دکل نفت سطح ۱ غیرقابل تخریب خواهید داشت.",
-                reply_markup=kb
-            )
-        else:
-            if is_new:
-                await message.answer(game_summary + "\n\n✅ شما یک دکل نفت سطح ۱ (غیرقابل تخریب) دریافت کردید!")
-            else:
-                await message.answer(game_summary + "\n\n🔔 شما قبلاً ثبت‌نام کرده‌اید، برای نمایش پنل از /panel استفاده کنید")
-    else:
-        await message.reply("✅ ربات در این گروه فعال شد.")
+    # ساخت پنل شیشه‌ای InlineKeyboard
+    panel_kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📊 موجودی", callback_data="inventory")],
+        [InlineKeyboardButton(text="🛒 فروشگاه", callback_data="shop"),
+         InlineKeyboardButton(text="💱 تبادل", callback_data="exchange")],
+        [InlineKeyboardButton(text="🏗️ دکل‌ها", callback_data="rigs"),
+         InlineKeyboardButton(text="🛩️ آشیانه‌ها", callback_data="hangars")],
+        [InlineKeyboardButton(text="🌍 گروه سراری", callback_data="guilds")]
+    ])
 
-# پنل کاربری
-@dp.message(Command("panel"))
-async def panel_cmd(message: types.Message):
-    if message.chat.type != "private":
-        return
-    kb = ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton(text="📊 موجودی")],
-            [KeyboardButton(text="🛒 فروشگاه"), KeyboardButton(text="💱 تبادل")],
-            [KeyboardButton(text="🏗️ دکل‌ها"), KeyboardButton(text="🛩️ آشیانه‌ها")],
-            [KeyboardButton(text="🌍 گروه سراری")]
-        ],
-        resize_keyboard=True
-    )
-    await message.answer("🔧 پنل کاربری:", reply_markup=kb)
+    await message.answer(game_summary, reply_markup=panel_kb)
 
-# موجودی در پیوی
-@dp.message(lambda msg: msg.chat.type == "private" and msg.text == "📊 موجودی")
-async def inventory_private(message: types.Message):
-    data = await get_user_inventory(message.from_user.id)
+# ------------------ callback handlers ------------------
+@dp.callback_query(lambda cb: cb.data == "inventory")
+async def callback_inventory(cb: types.CallbackQuery):
+    data = await get_user_inventory(cb.from_user.id)
     if data:
-        await message.answer("📊 موجودی کامل شما:\n\n" + data)
+        await cb.message.edit_text("📊 موجودی شما:\n\n" + data, reply_markup=cb.message.reply_markup)
     else:
-        await message.answer("❌ شما هنوز وارد بازی نشده‌اید. لطفاً /start بزنید.")
+        await cb.message.answer("❌ شما هنوز وارد بازی نشده‌اید. لطفاً /start بزنید.")
 
-# موجودی در گروه
-@dp.message(lambda msg: msg.chat.type in ("group", "supergroup") and msg.text.lower() == "موجودی")
-async def inventory_group(message: types.Message):
-    if not await is_bot_admin(message.chat.id):
-        await message.reply("⚠️ برای استفاده از ربات، باید ربات ادمین گروه باشد.")
-        return
-    
-    data = await get_user_inventory(message.from_user.id)
-    if data:
-        lines = data.split("\n")
-        summary = "\n".join(lines[:2])  # فقط پول و نفت برای گروه
-        summary += f"\n🎖️ سطح: {lines[4]}\n{lines[5]}"  # سطح و نوار تجربه
-        await message.reply("📊 موجودی شما:\n" + summary)
-
-# ------------------ Callbacks ------------------
-@dp.my_chat_member()
-async def my_chat_member_updated(event: types.ChatMemberUpdated):
-    chat = event.chat
-    new_status = event.new_chat_member.status
-    if db._mode == "postgres":
-        if new_status in ("member","administrator","creator"):
-            await db.execute(
-                "INSERT INTO groups(chat_id, title, username) VALUES($1,$2,$3) ON CONFLICT (chat_id) DO UPDATE SET title=$2, username=$3",
-                (chat.id, chat.title or "", chat.username or "")
-            )
-        else:
-            await db.execute("DELETE FROM groups WHERE chat_id=$1", (chat.id,))
-    else:
-        if new_status in ("member","administrator","creator"):
-            await db.execute("INSERT OR REPLACE INTO groups(chat_id, title, username) VALUES(?,?,?)", (chat.id, chat.title or "", chat.username or ""))
-        else:
-            await db.execute("DELETE FROM groups WHERE chat_id=?", (chat.id,))
-
-@dp.callback_query(lambda c: c.data == "help_quick")
-async def _help_quick(cb: types.CallbackQuery):
-    await cb.message.answer(
-        "راهنمای سریع:\n"
-        "1. ربات را با دکمه «➕ اضافه کردن ربات به گروه» به گروه اضافه کنید.\n"
-        "2. بعد از اضافه شدن، بازیکنان باید در خصوصی /start بزنند.\n"
-        "3. سپس می‌توانید در گروه با دستورات بازی کنید."
-    )
-    await cb.answer()
+@dp.callback_query(lambda cb: cb.data in ("shop","exchange","rigs","hangars","guilds"))
+async def callback_other(cb: types.CallbackQuery):
+    await cb.answer(f"💡 شما {cb.data} را زدید. این بخش هنوز در دست ساخت است.", show_alert=True)
 
 # ------------------ bootstrap ------------------
 async def main():
