@@ -384,7 +384,7 @@ async def cmd_start(message: types.Message, state: FSMContext):
     txt = f"سلام فرمانده {message.from_user.first_name or ''}!\nمن یک ربات بازی مینی‌جنگم — آماده‌ام تا جهان رو فتح (یا حداقل نفتشو بدزیم) کنیم 😏\nبرای شروع، منو به گروه اضافه کن."
     if groups_valid:
         txt += "\n\n💡 برای باز کردن پنل در هر گروه، ابتدا در آن گروه دستور /panel را ارسال کن یا از اینجا گروه فعال را انتخاب کن."
-        kb2 = InlineKeyboardMarkup()
+        kb2 = InlineKeyboardMarkup(inline_keyboard=[])
         for gid, title in groups_valid:
             kb2.add(InlineKeyboardButton(text=f"{title[:30]}", callback_data=f"set_active_group:{gid}"))
         await message.answer(txt, reply_markup=kb)
@@ -924,3 +924,4 @@ if __name__ == "__main__":
         asyncio.run(main())
     except (KeyboardInterrupt, SystemExit):
         logger.info("Bot stopped")
+
