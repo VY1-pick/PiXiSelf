@@ -5,6 +5,6 @@ description = "Telegram strategy-action war game bot"
 authors = ["Command"]
 
 [tool.poetry.dependencies]
-python = "^3.11"
-aiogram = "3.1.2"
-asyncpg = "1.0.2"
+python
+aiogram
+asyncpg
