@@ -12,6 +12,10 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
 import asyncpg
 
+# ------------------ Global tasks ------------------
+group_challenge_tasks: dict[int, asyncio.Task] = {}
+group_mission_tasks: dict[int, asyncio.Task] = {}
+
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 DATABASE_URL = os.getenv("DATABASE_URL")
 
@@ -495,3 +499,4 @@ if __name__ == "__main__":
         asyncio.run(main())
     except (KeyboardInterrupt, SystemExit):
         print("Bot stopped!")
+
