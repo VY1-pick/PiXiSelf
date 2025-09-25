@@ -252,7 +252,7 @@ async def cmd_start(message: types.Message, state: FSMContext):
         return
 
     await ensure_user(message.from_user)
-    username = message.from_user.username or message.from_user.first_name
+    username = message.from_user.first_name or message.from_user.username
     groups = await get_common_groups(message.from_user.id)
 
     me = await bot.get_me()
@@ -685,3 +685,4 @@ if __name__ == "__main__":
         asyncio.run(main())
     except (KeyboardInterrupt, SystemExit):
         print("Bot stopped!")
+
