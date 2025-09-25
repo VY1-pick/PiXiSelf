@@ -7,7 +7,7 @@ from typing import Optional, Dict, List, Tuple, Union
 
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command, ChatMemberUpdatedFilter
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, ChatMemberUpdated
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, ChatMemberUpdated, Update
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
 import asyncpg
@@ -642,7 +642,12 @@ async def on_bot_status_change(event: ChatMemberUpdated):
     elif new in ("left", "kicked"):
         await db.execute("DELETE FROM groups WHERE chat_id=$1", (chat.id,))
         print(f"[INFO] گروه {chat.title} ({chat.id}) از دیتابیس حذف شد.")
-
+        
+@dp.update()
+async def debug_all_updates(update: Update):
+    print(">>> UPDATE RECEIVED <<<")
+    print(update.json(indent=2))
+    
 # ------------------ Bootstrap ------------------
 async def main():
     await init_db()
@@ -665,6 +670,7 @@ if __name__ == "__main__":
         asyncio.run(main())
     except (KeyboardInterrupt, SystemExit):
         print("Bot stopped!")
+
 
 
 
