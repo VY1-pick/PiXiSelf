@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 from typing import Optional, Dict, List, Tuple, Union
 
 import asyncpg
+from aiogram.client.default import DefaultBotProperties
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, ChatMemberUpdated
@@ -24,7 +25,10 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 if not BOT_TOKEN or not DATABASE_URL:
     raise RuntimeError("BOT_TOKEN and DATABASE_URL environment variables are required")
 
-bot = Bot(token=BOT_TOKEN, parse_mode="HTML")
+bot = Bot(
+    token=BOT_TOKEN,
+    default=DefaultBotProperties(parse_mode="HTML")
+)
 dp = Dispatcher()
 
 # ---------- Constants / Game Balances ----------
@@ -953,3 +957,4 @@ if __name__ == "__main__":
         asyncio.run(main())
     except (KeyboardInterrupt, SystemExit):
         logger.info("Bot stopped")
+
