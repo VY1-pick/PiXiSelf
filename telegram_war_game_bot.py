@@ -1,81 +1,123 @@
-# telegram_war_game_bot_part1_fixed.py
+# bot.py
 import os
 import asyncio
+import logging
 import random
 from datetime import datetime, timedelta
 from typing import Optional, Dict, List, Tuple, Union
+
+import asyncpg
 from aiogram import Bot, Dispatcher, types
-from aiogram.filters import Command, ChatMemberUpdatedFilter
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, ChatMemberUpdated, Update
+from aiogram.filters import Command
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, ChatMemberUpdated
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
-import asyncpg
 
-# ------------------ Global tasks ------------------
-group_challenge_tasks: dict[int, asyncio.Task] = {}
-group_mission_tasks: dict[int, asyncio.Task] = {}
+# ---------- Logging ----------
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("mini_war_bot")
 
+# ---------- Config ----------
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 DATABASE_URL = os.getenv("DATABASE_URL")
 
 if not BOT_TOKEN or not DATABASE_URL:
     raise RuntimeError("BOT_TOKEN and DATABASE_URL environment variables are required")
 
-bot = Bot(token=BOT_TOKEN)
+bot = Bot(token=BOT_TOKEN, parse_mode="HTML")
 dp = Dispatcher()
 
-# ------------------ DB Adapter ------------------
+# ---------- Constants / Game Balances ----------
+START_MONEY = 100.0
+START_OIL = 100.0
+
+MISSILE_PRICE = 20.0
+JET_PRICE = 50.0
+OIL_SELL_PRICE = 1.0  # per oil unit
+
+JET_OIL_COST = 10.0  # oil consumed per jet attack (per jet used)
+MISSILE_OIL_COST = 0.0  # missiles don't need oil to fire (example)
+JET_DAMAGE = 0.35  # 35% destruction
+MISSILE_DAMAGE = 0.25  # 25% destruction
+VERBAL_REWARD = 5.0
+VERBAL_COOLDOWN = 100  # seconds
+ATTACK_TARGET_COOLDOWN = 30 * 60  # 30 minutes in seconds
+
+QUIZ_INTERVAL_SECONDS = 5 * 60  # every 5 minutes (customize)
+MISSION_INTERVAL_SECONDS = 7 * 60  # every 7 minutes (customize)
+
+# mapping for currency name based on country (display only)
+COUNTRY_CURRENCIES = {
+    "ایران": "تومان",
+    "روسیه": "روبل",
+    "آمریکا": "دلار",
+}
+
+# Countries available
+COUNTRIES = ["ایران", "روسیه", "آمریکا"]
+
+# ---------- DB Adapter ----------
 class DBAdapter:
-    def __init__(self, database_url: str):
-        self.database_url = database_url
-        self._pg_pool: Optional[asyncpg.Pool] = None
+    def __init__(self, dsn: str):
+        self.dsn = dsn
+        self.pool: Optional[asyncpg.Pool] = None
 
     async def init(self):
-        self._pg_pool = await asyncpg.create_pool(dsn=self.database_url, min_size=1, max_size=10)
+        self.pool = await asyncpg.create_pool(dsn=self.dsn, min_size=1, max_size=10)
 
-    async def execute(self, sql: str, params: Tuple = ()):
-        async with self._pg_pool.acquire() as conn:
+    async def execute(self, sql: str, *params):
+        async with self.pool.acquire() as conn:
             await conn.execute(sql, *params)
 
-    async def fetchone(self, sql: str, params: Tuple = ()):
-        async with self._pg_pool.acquire() as conn:
+    async def fetchrow(self, sql: str, *params):
+        async with self.pool.acquire() as conn:
             row = await conn.fetchrow(sql, *params)
             return dict(row) if row else None
 
-    async def fetchall(self, sql: str, params: Tuple = ()):
-        async with self._pg_pool.acquire() as conn:
+    async def fetch(self, sql: str, *params):
+        async with self.pool.acquire() as conn:
             rows = await conn.fetch(sql, *params)
             return [dict(r) for r in rows]
 
+    async def transaction(self):
+        conn = await self.pool.acquire()
+        tr = conn.transaction()
+        await tr.start()
+        return conn, tr
+
 db = DBAdapter(DATABASE_URL)
 
-# ------------------ FSM ------------------
+# ---------- FSM ----------
 class CountryFSM(StatesGroup):
     waiting_for_country = State()
     waiting_for_rename = State()
 
-COUNTRIES = ["ایران", "روسیه"]
+# ---------- In-memory tasks ----------
+group_challenge_tasks: Dict[int, asyncio.Task] = {}
+group_mission_tasks: Dict[int, asyncio.Task] = {}
+user_active_group: Dict[int, int] = {}  # user_id -> chat_id
 
-# ------------------ DB Init ------------------
+# ---------- DB Init ----------
 async def init_db():
     await db.init()
-    # users
+
+    # users global table
     await db.execute("""
     CREATE TABLE IF NOT EXISTS users (
         user_id BIGINT PRIMARY KEY,
         username TEXT,
         first_name TEXT,
         last_name TEXT,
-        money_amount DOUBLE PRECISION DEFAULT 100.0,
+        money_amount DOUBLE PRECISION DEFAULT $1,
         money_currency TEXT DEFAULT 'USD',
-        oil_amount DOUBLE PRECISION DEFAULT 100.0,
+        oil_amount DOUBLE PRECISION DEFAULT $2,
         level INTEGER DEFAULT 1,
         experience INTEGER DEFAULT 0,
         has_initial_rig INTEGER DEFAULT 0
     )
-    """)
+    """, START_MONEY, START_OIL)
 
-    # oil rigs
+    # oil rigs per user (can have many per user)
     await db.execute("""
     CREATE TABLE IF NOT EXISTS oil_rigs (
         id SERIAL PRIMARY KEY,
@@ -88,17 +130,17 @@ async def init_db():
     )
     """)
 
-    # groups
+    # groups (chats)
     await db.execute("""
     CREATE TABLE IF NOT EXISTS groups (
         chat_id BIGINT PRIMARY KEY,
         title TEXT,
-        username TEXT
+        username TEXT,
         active BOOLEAN DEFAULT TRUE
     )
     """)
 
-    # temp and final profiles per user per chat
+    # temp profile while selecting country per chat
     await db.execute("""
     CREATE TABLE IF NOT EXISTS temp_profiles (
         user_id BIGINT,
@@ -107,6 +149,8 @@ async def init_db():
         PRIMARY KEY(user_id, chat_id)
     )
     """)
+
+    # user profiles per group (the main per-group game state)
     await db.execute("""
     CREATE TABLE IF NOT EXISTS user_profiles (
         user_id BIGINT,
@@ -122,7 +166,26 @@ async def init_db():
     )
     """)
 
-    # challenges & group_challenges
+    # store attack cooldowns: per attacker -> per target last attack time
+    await db.execute("""
+    CREATE TABLE IF NOT EXISTS attack_cooldowns (
+        attacker_id BIGINT,
+        target_id BIGINT,
+        chat_id BIGINT,
+        last_attack TIMESTAMP,
+        PRIMARY KEY(attacker_id, target_id, chat_id)
+    )
+    """)
+
+    # verbal attack cooldowns per attacker
+    await db.execute("""
+    CREATE TABLE IF NOT EXISTS verbal_cooldowns (
+        user_id BIGINT PRIMARY KEY,
+        last_verbal TIMESTAMP
+    )
+    """)
+
+    # challenges (quiz questions)
     await db.execute("""
     CREATE TABLE IF NOT EXISTS challenges (
         id SERIAL PRIMARY KEY,
@@ -132,6 +195,8 @@ async def init_db():
         reward_oil DOUBLE PRECISION DEFAULT 50.0
     )
     """)
+
+    # active group challenge
     await db.execute("""
     CREATE TABLE IF NOT EXISTS group_challenges (
         chat_id BIGINT PRIMARY KEY,
@@ -143,7 +208,7 @@ async def init_db():
     )
     """)
 
-    # missions & schedule
+    # missions (definitions)
     await db.execute("""
     CREATE TABLE IF NOT EXISTS missions (
         id SERIAL PRIMARY KEY,
@@ -153,523 +218,738 @@ async def init_db():
         type TEXT DEFAULT 'generic'
     )
     """)
+    # group missions state (first complete wins)
     await db.execute("""
     CREATE TABLE IF NOT EXISTS group_missions (
         chat_id BIGINT,
         mission_id INT,
         user_id BIGINT,
         status TEXT DEFAULT 'pending',
-        PRIMARY KEY(chat_id, mission_id, user_id)
-    )
-    """)
-    await db.execute("""
-    CREATE TABLE IF NOT EXISTS group_missions_schedule (
-        chat_id BIGINT PRIMARY KEY,
-        last_update TIMESTAMP
+        PRIMARY KEY(chat_id, mission_id)
     )
     """)
 
-# ------------------ Helpers ------------------
-async def ensure_user(user: types.User) -> bool:
-    row = await db.fetchone("SELECT has_initial_rig FROM users WHERE user_id=$1", (user.id,))
-    if row is None:
+# ---------- Helpers ----------
+async def ensure_user_global(user: types.User):
+    row = await db.fetchrow("SELECT user_id FROM users WHERE user_id=$1", user.id)
+    if not row:
         await db.execute(
-            "INSERT INTO users(user_id, username, first_name, last_name, money_amount, money_currency, oil_amount, level, experience, has_initial_rig) "
-            "VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)",
-            (user.id, user.username or "", user.first_name or "", user.last_name or "", 100.0, "USD", 100.0, 1, 0, 1)
+            "INSERT INTO users(user_id, username, first_name, last_name, money_amount, money_currency, oil_amount, level, experience, has_initial_rig) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)",
+            user.id, user.username or "", user.first_name or "", user.last_name or "", START_MONEY, "USD", START_OIL, 1, 0, 1
         )
+        # initial invulnerable rig
         await db.execute(
             "INSERT INTO oil_rigs(owner_id, level, hp, capacity, extraction_speed, invulnerable) VALUES($1,$2,$3,$4,$5,$6)",
-            (user.id, 1, 1000, 100, 1.0, 1)
+            user.id, 1, 1000, 100, 1.0, 1
         )
-        return True
-    return False
 
-async def get_common_groups(user_id: int) -> List[Tuple[int, str]]:
-    """
-    برمی‌گرداند گروه‌هایی که در جدول groups هستند و کاربر نیز عضو آن‌ها است.
-    """
-    rows = await db.fetchall("SELECT chat_id, title FROM groups")
-    valid_groups: List[Tuple[int, str]] = []
-    me = await bot.get_me()
-    for r in rows:
-        chat_id = r["chat_id"]
-        try:
-            # بررسی اینکه کاربر در گروه هست یا نه
-            user_member = await bot.get_chat_member(chat_id, user_id)
-            # اگر کاربر در گروه نیست یا اخراج شده باشد حذف کن
-            if user_member.status in ("left", "kicked"):
-                continue
-            # همچنین بررسی می‌کنیم ربات هنوز در گروه هست
-            try:
-                bot_member = await bot.get_chat_member(chat_id, me.id)
-                if bot_member.status in ("left", "kicked"):
-                    # اگر ربات نیست، حذف رکورد از DB برای تطابق (safe)
-                    # ولی نَه بصورت invasive — فقط skip
-                    continue
-            except Exception:
-                continue
-            valid_groups.append((chat_id, r["title"]))
-        except Exception:
-            continue
-    return valid_groups
+def format_money(amount: float, country: Optional[str] = None) -> str:
+    currency = COUNTRY_CURRENCIES.get(country, "USD")
+    return f"{amount:.2f} {currency}"
+
+async def get_user_profile(user_id: int, chat_id: int) -> Optional[dict]:
+    return await db.fetchrow("SELECT * FROM user_profiles WHERE user_id=$1 AND chat_id=$2", user_id, chat_id)
+
+async def create_default_profile(user_id: int, chat_id: int, country: str):
+    await db.execute(
+        "INSERT INTO user_profiles(user_id, chat_id, country, oil, money, missiles, jets, defenses, level) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) "
+        "ON CONFLICT (user_id, chat_id) DO NOTHING",
+        user_id, chat_id, country, START_OIL, START_MONEY, 0, 0, 0, 1
+    )
 
 async def check_bot_admin(chat_id: int, cb_or_msg: Optional[Union[types.CallbackQuery, types.Message]] = None) -> bool:
-    """بررسی می‌کند آیا ربات در گروه ادمین است؛ در صورت ارائهٔ cb_or_msg پیغام مناسب نمایش می‌دهد."""
     try:
         me = await bot.get_me()
         member = await bot.get_chat_member(chat_id, me.id)
-    except Exception:
-        if cb_or_msg:
-            try:
+        if member.status not in ("administrator", "creator"):
+            if cb_or_msg:
+                txt = "⚠️ من ادمین نیستم؛ لطفاً ربات را ادمین کنید تا بازی کار کند."
                 if isinstance(cb_or_msg, types.CallbackQuery):
-                    await cb_or_msg.answer("⚠️ خطا در بررسی دسترسی ربات.", show_alert=True)
+                    await cb_or_msg.answer(txt, show_alert=True)
                 else:
-                    await cb_or_msg.answer("⚠️ خطا در بررسی دسترسی ربات.")
-            except:
-                pass
-        return False
-
-    if member.status not in ("administrator", "creator"):
+                    await cb_or_msg.answer(txt)
+            return False
+    except Exception as e:
+        logger.exception("check_bot_admin error")
         if cb_or_msg:
-            try:
-                if isinstance(cb_or_msg, types.CallbackQuery):
-                    await cb_or_msg.answer("⚠️ فرمانده در جایگاه خودش نیست! لطفاً ربات را ادمین کنید.", show_alert=True)
-                else:
-                    await cb_or_msg.answer("⚠️ فرمانده در جایگاه خودش نیست! لطفاً ربات را ادمین کنید.")
-            except:
-                pass
+            txt = "⚠️ خطا در بررسی دسترسی ربات."
+            if isinstance(cb_or_msg, types.CallbackQuery):
+                await cb_or_msg.answer(txt, show_alert=True)
+            else:
+                await cb_or_msg.answer(txt)
         return False
     return True
 
-# ------------------ Start & FSM ------------------
-user_active_group: Dict[int, int] = {}
-
-@dp.message(Command("start"))
-async def cmd_start(message: types.Message, state: FSMContext):
-    # تنها در خصوصی پاسخ بده
-    if message.chat.type != "private":
-        return
-
-    await ensure_user(message.from_user)
-    username = message.from_user.first_name or message.from_user.username
-    groups = await get_common_groups(message.from_user.id)
-
-    me = await bot.get_me()
-    kb = InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(
-            text="➕ افزودن به گروه",
-            url=f"https://t.me/{me.username}"
-        )
-    ]])
-
-    text = (
-        f"فرمانده:\n"
-        f"سرباز {username}، برای شروع باید منو به گروهت اضافه کنی ⚔️\n"
-        "بعد از افزودن منو ادمین کنین تا بتونم فرماندهی کنم.\n\n"
-    )
-
-    if groups:
-        text += "💡 برای باز کردن پنل دستور /panel را ارسال کنید."
-
-    await message.answer(text, reply_markup=kb)
-
-    # اگر فقط یک گروه مشترک هست، آمادهٔ انتخاب کشور شو
-    if len(groups) == 1:
-        chat_id, title = groups[0]
-        user_active_group[message.from_user.id] = chat_id
-        # ذخیره chat_id در state برای مراحل FSM بعدی
-        await state.update_data(chat_id=chat_id)
-        await state.set_state(CountryFSM.waiting_for_country)
-        kb2 = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text=c, callback_data=f"select_country:{c}")] for c in COUNTRIES])
-        await message.answer(f"🌍 گروه فعال: {title}\nلطفاً کشور خود را انتخاب کنید:", reply_markup=kb2)
-
-# وقتی کاربر /panel رو می‌زنه — فقط در خصوصی
-@dp.message(Command("panel"))
-async def open_panel(message: types.Message):
-    if message.chat.type != "private":
-        await message.reply("❌ فرمانده: پنل فقط در چت خصوصی در دسترس است.")
-        return
-
-    groups = await get_common_groups(message.from_user.id)
-    if not groups:
-        await message.answer("⚠️ شما هنوز هیچ گروه مشترکی با ربات ندارید. ابتدا من را به گروه اضافه کنید.")
-        return
-
-    # اگر فقط یک گروه مشترک است، از قبل انتخاب می‌شود؛ در غیر این صورت از کاربر بخواه انتخاب کند
-    if len(groups) == 1:
-        chat_id, title = groups[0]
-        user_active_group[message.from_user.id] = chat_id
-        await show_panel(message, message.from_user.username or message.from_user.first_name, chat_id)
-        return
-
-    kb_rows = [[InlineKeyboardButton(text=title or str(chat_id), callback_data=f"group_{chat_id}")] for chat_id, title in groups]
-    kb = InlineKeyboardMarkup(inline_keyboard=kb_rows)
-    await message.answer("چند گروه مشترک پیدا شد. لطفاً گروه مورد نظر را انتخاب کنید:", reply_markup=kb)
-
-# انتخاب گروه از دکمه‌ها
-@dp.callback_query(lambda cb: cb.data.startswith("group_"))
-async def select_group(cb: types.CallbackQuery):
-    user_id = cb.from_user.id
-    chat_id = int(cb.data.split("_", 1)[1])
-    common = await get_common_groups(user_id)
-    if not any(chat_id == g[0] for g in common):
-        await cb.answer("⚠️ شما در این گروه عضو نیستید یا ربات هنوز در آن گروه نیست.", show_alert=True)
-        return
-    if not await check_bot_admin(chat_id, cb):
-        return
-    user_active_group[user_id] = chat_id
-    await cb.answer()
-    await show_panel(cb.message, cb.from_user.username or cb.from_user.first_name, chat_id)
-
-# FSM callback country selection
-@dp.callback_query(lambda cb: cb.data.startswith("select_country:"))
-async def select_country(cb: types.CallbackQuery, state: FSMContext):
-    country = cb.data.split(":",1)[1]
-    data = await state.get_data()
-    chat_id = data.get("chat_id")
-    if chat_id is None:
-        await cb.answer("⚠️ خطا: اطلاعات گروه پیدا نشد. /start را دوباره بزنید.", show_alert=True)
-        return
-    count = await db.fetchone("SELECT COUNT(*) as c FROM user_profiles WHERE country LIKE $1", (f"{country}%",))
-    if count and count["c"] > 0:
-        country = f"{country}{count['c']+1}"
+# ---------- Group utilities ----------
+async def add_group_if_missing(chat: types.Chat):
     await db.execute(
-        "INSERT INTO temp_profiles(user_id, chat_id, country) VALUES($1,$2,$3) "
-        "ON CONFLICT (user_id, chat_id) DO UPDATE SET country=$3",
-        (cb.from_user.id, chat_id, country)
-    )
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="✅ تایید", callback_data="confirm_country")],
-        [InlineKeyboardButton(text="✏️ تغییر نام", callback_data="rename_country")]
-    ])
-    await cb.message.answer(f"🏳️ کشور انتخابی شما: {country}\nآیا می‌خواهید نام آن را تغییر دهید؟", reply_markup=kb)
-    await cb.answer()
-
-@dp.callback_query(lambda cb: cb.data == "confirm_country")
-async def confirm_country(cb: types.CallbackQuery, state: FSMContext):
-    data = await state.get_data()
-    chat_id = data.get("chat_id")
-    if chat_id is None:
-        await cb.answer("⚠️ خطا: chat_id موجود نیست.", show_alert=True)
-        return
-    temp = await db.fetchone("SELECT country FROM temp_profiles WHERE user_id=$1 AND chat_id=$2", (cb.from_user.id, chat_id))
-    if not temp:
-        await cb.answer("⚠️ خطا: پروفایل موقت پیدا نشد.", show_alert=True)
-        return
-    country = temp["country"]
-    await db.execute(
-        "INSERT INTO user_profiles(user_id, chat_id, country, oil, money, missiles, jets, defenses, level) "
-        "VALUES($1,$2,$3,0,0,0,0,0,1) ON CONFLICT(user_id, chat_id) DO NOTHING",
-        (cb.from_user.id, chat_id, country)
-    )
-    await cb.message.answer(f"🎉 خوش آمدید! کشور شما {country} ثبت شد.\nشما برای شروع یک دکل نفت سطح 1 دریافت کردید.")
-    await state.clear()
-    await cb.answer()
-    await show_panel(cb.message, cb.from_user.username or cb.from_user.first_name, chat_id)
-
-@dp.callback_query(lambda cb: cb.data == "rename_country")
-async def rename_country(cb: types.CallbackQuery, state: FSMContext):
-    await cb.message.answer("✏️ لطفاً نام جدید کشور خود را ارسال کنید:")
-    await state.set_state(CountryFSM.waiting_for_rename)
-    await cb.answer()
-
-@dp.message(CountryFSM.waiting_for_rename)
-async def process_rename(message: types.Message, state: FSMContext):
-    new_name = message.text.strip()
-    data = await state.get_data()
-    chat_id = data.get("chat_id")
-    if chat_id is None:
-        await message.answer("⚠️ خطا: chat_id پیدا نشد. /start را دوباره بزنید.")
-        await state.clear()
-        return
-    count = await db.fetchone("SELECT COUNT(*) as c FROM user_profiles WHERE country LIKE $1", (f"{new_name}%",))
-    if count and count["c"] > 0:
-        new_name = f"{new_name}{count['c']+1}"
-    await db.execute(
-        "UPDATE temp_profiles SET country=$1 WHERE user_id=$2 AND chat_id=$3",
-        (new_name, message.from_user.id, chat_id)
-    )
-    await message.answer(f"✅ نام کشور شما به {new_name} تغییر کرد.\nلطفاً تایید کنید.", reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="✅ تایید", callback_data="confirm_country")]
-    ]))
-    await state.set_state(CountryFSM.waiting_for_country)
-
-# ------------------ Panel & Inventory ------------------
-async def show_panel(message: types.Message, username: str, chat_id: Optional[int]):
-    if chat_id is None:
-        await message.answer("⚠️ ابتدا یک گروه انتخاب کنید (با /panel یا از طریق دکمه‌ها).")
-        return
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📊 موجودی", callback_data="inventory")],
-        [InlineKeyboardButton(text="🛒 فروشگاه", callback_data="shop"),
-         InlineKeyboardButton(text="💱 تبادل", callback_data="exchange")],
-        [InlineKeyboardButton(text="🏗️ دکل‌ها", callback_data="rigs"),
-         InlineKeyboardButton(text="🛩️ آشیانه‌ها", callback_data="hangars")],
-        [InlineKeyboardButton(text="🌍 گروه سراری", callback_data="guilds")]
-    ])
-    await message.answer(f"فرمانده:\n سرباز {username}، پنل وضعیتت برای گروه انتخاب‌شده آماده است ⚔️", reply_markup=kb)
-
-async def get_user_inventory(user_id: int) -> Optional[str]:
-    user = await db.fetchone("SELECT money_amount, money_currency, oil_amount, level, experience FROM users WHERE user_id=$1", (user_id,))
-    if not user:
-        return None
-    money, currency, oil, level, exp = user["money_amount"], user["money_currency"], user["oil_amount"], user["level"], user["experience"]
-    bar = "█" * min(level,10) + "░" * (10 - min(level,10))
-    rigs = await db.fetchone("SELECT COUNT(*) as cnt, MIN(level) as min_level, MAX(level) as max_level FROM oil_rigs WHERE owner_id=$1", (user_id,))
-    rigs_count, rigs_min, rigs_max = rigs["cnt"], rigs["min_level"], rigs["max_level"]
-    return (
-        f"💰 پول: {money} {currency}\n"
-        f"🛢️ نفت: {oil}\n"
-        f"🏗️ دکل‌ها: {rigs_count} (سطح {rigs_min} تا {rigs_max})\n"
-        f"🎖️ سطح: {level}\n"
-        f"✨ تجربه: {exp}\n"
-        f"📊 پیشرفت سطح: [{bar}]"
+        "INSERT INTO groups(chat_id, title, username, active) VALUES($1,$2,$3,$4) ON CONFLICT (chat_id) DO UPDATE SET title=$2, username=$3, active=$4",
+        chat.id, chat.title or "", chat.username or "", True
     )
 
-@dp.callback_query(lambda cb: cb.data == "inventory")
-async def callback_inventory(cb: types.CallbackQuery):
-    chat_id = user_active_group.get(cb.from_user.id)
-    if not chat_id:
-        await cb.answer("⚠️ ابتدا یک گروه انتخاب کن (از طریق /start یا /panel).", show_alert=True)
-        return
-    if not await check_bot_admin(chat_id, cb):
-        return
-    data = await get_user_inventory(cb.from_user.id)
-    if data:
-        try:
-            await cb.message.edit_text(f"فرمانده:\n {cb.from_user.username}, موجودی شما:\n\n{data}", reply_markup=cb.message.reply_markup)
-        except:
-            await cb.message.answer(f"فرمانده:\n {cb.from_user.username}, موجودی شما:\n\n{data}")
-    else:
-        await cb.message.answer(f"فرمانده:\n سرباز {cb.from_user.username}، شما هنوز وارد بازی نشده‌اید. لطفاً /start بزنید.")
+async def start_group_tasks(chat_id: int):
+    if chat_id not in group_challenge_tasks:
+        group_challenge_tasks[chat_id] = asyncio.create_task(run_group_challenges(chat_id))
+    if chat_id not in group_mission_tasks:
+        group_mission_tasks[chat_id] = asyncio.create_task(run_group_missions(chat_id))
 
-@dp.callback_query(lambda cb: cb.data in ("shop","exchange","rigs","hangars","guilds"))
-async def callback_other(cb: types.CallbackQuery):
-    chat_id = user_active_group.get(cb.from_user.id)
-    if not chat_id:
-        await cb.answer("⚠️ ابتدا یک گروه انتخاب کن (از طریق /start یا /panel).", show_alert=True)
-        return
-    if not await check_bot_admin(chat_id, cb):
-        return
-    await cb.answer(f"💡 بخش {cb.data} هنوز در دست ساخت است.", show_alert=True)
+async def stop_group_tasks(chat_id: int):
+    t1 = group_challenge_tasks.pop(chat_id, None)
+    if t1:
+        t1.cancel()
+    t2 = group_mission_tasks.pop(chat_id, None)
+    if t2:
+        t2.cancel()
 
-# ------------------ Challenges Timer ------------------
-active_challenges: Dict[int, Dict] = {}
-
-async def run_group_challenges(chat_id: int):
-    while True:
-        delay = random.randint(5*60, 60*60)  # بین 5 تا 60 دقیقه
-        await asyncio.sleep(delay)
-        if not await check_bot_admin(chat_id, None):
-            continue
-        challenge = await db.fetchone("SELECT * FROM challenges ORDER BY RANDOM() LIMIT 1")
-        if not challenge:
-            continue
-        try:
-            kb = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="⏱ زمان باقی‌مانده", callback_data=f"time_{chat_id}")]
-            ])
-            msg = await bot.send_message(chat_id, f"فرمانده:\n سربازان! آماده باشید ⚔️\n\nچالش: {challenge['text']}", reply_markup=kb)
-        except Exception:
-            continue
-        start_time = datetime.utcnow()
-        end_time = start_time + timedelta(seconds=90)
-        active_challenges[chat_id] = {"challenge": challenge, "message_id": msg.message_id, "start_time": start_time, "end_time": end_time, "answered_by": None}
-        # persist
-        try:
-            await db.execute(
-                "INSERT INTO group_challenges(chat_id, challenge_id, message_id, start_time, end_time, active) "
-                "VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(chat_id) DO UPDATE SET challenge_id=$2, message_id=$3, start_time=$4, end_time=$5, active=$6",
-                (chat_id, challenge['id'], msg.message_id, start_time, end_time, 1)
-            )
-        except Exception:
-            pass
-        for remaining in range(90, 0, -1):
-            try:
-                await msg.edit_text(f"فرمانده:\n سربازان! آماده باشید ⚔️\n\nچالش: {challenge['text']}\n⏱ زمان: {remaining} ثانیه")
-            except Exception:
-                break
-            await asyncio.sleep(1)
-        info = active_challenges.pop(chat_id, None)
-        if info and not info["answered_by"]:
-            try:
-                await msg.edit_text(f"فرمانده:\n زمان چالش به پایان رسید!\nپاسخ صحیح: {challenge['answer']}")
-            except Exception:
-                pass
-
-@dp.callback_query(lambda cb: cb.data.startswith("time_"))
-async def show_remaining_time(cb: types.CallbackQuery):
-    chat_id = int(cb.data.split("_")[1])
-    info = active_challenges.get(chat_id)
-    if not info:
-        await cb.answer("⏱ هیچ چالشی فعال نیست!", show_alert=True)
-        return
-    remaining = int((info["end_time"] - datetime.utcnow()).total_seconds())
-    if remaining < 0:
-        await cb.answer("⏱ زمان به پایان رسیده!", show_alert=True)
-    else:
-        await cb.answer(f"⏱ زمان باقی‌مانده: {remaining} ثانیه", show_alert=True)
-
-@dp.message()
-async def handle_challenge_reply(message: types.Message):
-    # بررسی پاسخ‌ها فقط اگر جواب به پیام چالش باشد
-    if not message.reply_to_message:
-        return
-    chat_id = message.chat.id
-    # اگر ربات ادمین نیست، پاسخ‌ها نپذیر
-    if not await check_bot_admin(chat_id, message):
-        return
-    if chat_id not in active_challenges:
-        return
-    info = active_challenges[chat_id]
-    if message.reply_to_message.message_id != info["message_id"]:
-        return
-    if info["answered_by"] is not None:
-        return  # پاسخ قبلاً ثبت شده
-    challenge = info["challenge"]
-    if message.text and message.text.strip().lower() == (challenge.get("answer") or "").strip().lower():
-        info["answered_by"] = message.from_user.id
-        reward_money = challenge["reward_money"]
-        reward_oil = challenge["reward_oil"]
-        try:
-            await db.execute(
-                "UPDATE users SET money_amount = money_amount + $1, oil_amount = oil_amount + $2 WHERE user_id=$3",
-                (reward_money, reward_oil, message.from_user.id)
-            )
-        except Exception:
-            pass
-        await message.reply(f"فرمانده:\n تبریک سرباز {message.from_user.username}! 🎉\nجوایز شما: 💰 {reward_money}, 🛢️ {reward_oil}")
-        try:
-            await bot.edit_message_text(
-                chat_id=chat_id,
-                message_id=info["message_id"],
-                text=f"چالش: {challenge['text']}\n✅ پاسخ صحیح داده شد توسط {message.from_user.username}\n⏱ زمان باقی‌مانده: {(info['end_time'] - datetime.utcnow()).seconds} ثانیه"
-            )
-        except Exception:
-            pass
-
-# ------------------ Missions (unchanged logic) ------------------
-async def check_mission_completion(chat_id: int):
-    missions = await db.fetchall("SELECT * FROM group_missions WHERE chat_id=$1 AND status='pending'", (chat_id,))
-    for mission in missions:
-        if mission["user_id"] != 0:
-            user = await db.fetchone("SELECT username FROM users WHERE user_id=$1", (mission["user_id"],))
-            if not user:
-                continue
-            reward_money = 100
-            reward_oil = 100
-            try:
-                await db.execute(
-                    "UPDATE users SET money_amount = money_amount + $1, oil_amount = oil_amount + $2 WHERE user_id=$3",
-                    (reward_money, reward_oil, mission["user_id"])
-                )
-                await db.execute(
-                    "UPDATE group_missions SET status='completed' WHERE chat_id=$1 AND mission_id=$2 AND user_id=$3",
-                    (chat_id, mission["mission_id"], mission["user_id"])
-                )
-            except Exception:
-                pass
-            if not await check_bot_admin(chat_id, None):
-                continue
-            try:
-                await bot.send_message(
-                    chat_id,
-                    f"فرمانده:\n سرباز {user['username']} ماموریت `{mission['mission_id']}` را تکمیل کرد! 🎖️\nجوایز: 💰 {reward_money}, 🛢️ {reward_oil}"
-                )
-            except Exception:
-                pass
-
-async def wait_until_next(hour: int, minute: int = 0):
-    now = datetime.utcnow()
-    target = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
-    if target <= now:
-        target += timedelta(days=1)
-    await asyncio.sleep((target - now).total_seconds())
-
-async def run_group_missions(chat_id: int):
-    while True:
-        now = datetime.utcnow()
-        if now.hour < 12:
-            await wait_until_next(12, 0)
-        else:
-            await wait_until_next(0, 0)
-        missions = await db.fetchall("SELECT * FROM missions ORDER BY RANDOM() LIMIT 3")
-        await db.execute("DELETE FROM group_missions WHERE chat_id=$1", (chat_id,))
-        for m in missions:
-            await db.execute(
-                "INSERT INTO group_missions(chat_id, mission_id, user_id, status) VALUES($1,$2,0,'pending')",
-                (chat_id, m['id'])
-            )
-        await db.execute(
-            "INSERT INTO group_missions_schedule(chat_id, last_update) VALUES($1,$2) "
-            "ON CONFLICT (chat_id) DO UPDATE SET last_update=$2",
-            (chat_id, datetime.utcnow())
-        )
-        for _ in range(12 * 60 // 5):
-            await check_mission_completion(chat_id)
-            await asyncio.sleep(300)
-
-# ------------------ My Chat Member handler (bot join/leave) ------------------
+# ---------- Handlers: my_chat_member ----------
 @dp.my_chat_member()
 async def bot_membership_changed(event: ChatMemberUpdated):
     chat_id = event.chat.id
     new_status = event.new_chat_member.status
-    old_status = event.old_chat_member.status
 
-    print(f">>> my_chat_member event received: chat_id={chat_id}, old={old_status}, new={new_status}")
-
-    # وقتی تازه به گروه اضافه شد (اما هنوز ادمین نیست)
     if new_status == "member":
         await db.execute(
-            """
-            INSERT INTO groups(chat_id, title, username)
-            VALUES ($1, $2, $3)
-            ON CONFLICT (chat_id) DO UPDATE
-            SET title=$2, username=$3
-            """,
-            (chat.id, chat.title or "", chat.username or "", True)
+            "INSERT INTO groups(chat_id, title, username, active) VALUES($1,$2,$3,$4) ON CONFLICT (chat_id) DO UPDATE SET title=$2, username=$3, active=$4",
+            chat_id, event.chat.title or "", event.chat.username or "", True
         )
+        await bot.send_message(chat_id, "من به گروه اضافه شدم ✅\nبرای عملکرد کامل، لطفاً منو ادمین کنید ⚔️ (فقط حق ارسال پیام و مدیریت پیام‌ها لازمه).")
+        await start_group_tasks(chat_id)
+    elif new_status in ("administrator", "creator"):
+        await db.execute("UPDATE groups SET active=$2 WHERE chat_id=$1", chat_id, True)
+        await bot.send_message(chat_id, "خیلی خب! من الان ادمین شدم — آماده‌ام برای نبرد و کوییزها! 🛡️")
+        await start_group_tasks(chat_id)
+    elif new_status in ("left", "kicked"):
+        await db.execute("DELETE FROM groups WHERE chat_id=$1", chat_id)
+        await stop_group_tasks(chat_id)
+        logger.info(f"Removed group {chat_id} from DB.")
 
-        await bot.send_message(chat_id, "من به گروه اضافه شدم ✅\nبرای اینکه بتونم فرماندهی کنم، منو ادمین کنین ⚔️")
+# ---------- Commands: start, panel, select group ----------
+@dp.message(Command("start"))
+async def cmd_start(message: types.Message, state: FSMContext):
+    if message.chat.type != "private":
+        return
+    await ensure_user_global(message.from_user)
+    groups = await db.fetch("SELECT chat_id, title FROM groups WHERE active=TRUE")
+    groups_valid = []
+    for g in groups:
+        gid = g["chat_id"]
+        # check membership
+        try:
+            member = await bot.get_chat_member(gid, message.from_user.id)
+            if member.status in ("left", "kicked"):
+                continue
+            groups_valid.append((gid, g["title"]))
+        except Exception:
+            continue
 
-    # وقتی ادمین شد
-    elif new_status == "administrator":
-        await db.execute(
-            "INSERT INTO groups(chat_id, active) VALUES($1, $2) ON CONFLICT (chat_id) DO UPDATE SET active=$2",
-            (chat_id, True)
-        )
-        await bot.send_message(chat_id, "سپاس فرمانده! 🙌\nحالا می‌تونم دستور بدم ⚔️")
+    kb = InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="➕ افزودن به گروه", url=f"https://t.me/{(await bot.get_me()).username}")
+    ]])
+    txt = f"سلام فرمانده {message.from_user.first_name or ''}!\nمن یک ربات بازی مینی‌جنگم — آماده‌ام تا جهان رو فتح (یا حداقل نفتشو بدزیم) کنیم 😏\nبرای شروع، منو به گروه اضافه کن."
+    if groups_valid:
+        txt += "\n\n💡 برای باز کردن پنل در هر گروه، ابتدا در آن گروه دستور /panel را ارسال کن یا از اینجا گروه فعال را انتخاب کن."
+        kb2 = InlineKeyboardMarkup()
+        for gid, title in groups_valid:
+            kb2.add(InlineKeyboardButton(text=f"{title[:30]}", callback_data=f"set_active_group:{gid}"))
+        await message.answer(txt, reply_markup=kb)
+        await message.answer("گروه‌های مشترک شما:", reply_markup=kb2)
+    else:
+        await message.answer(txt, reply_markup=kb)
 
-    # وقتی حذف شد
-    elif new_status == "left":
-        await db.execute("DELETE FROM groups WHERE chat_id=$1", (chat_id,))
-        print(f"Group {chat_id} deleted from database.")
-    
-# ------------------ Bootstrap ------------------
-async def main():
-    await init_db()
-    groups = await db.fetchall("SELECT chat_id FROM groups")
+@dp.callback_query(lambda c: c.data and c.data.startswith("set_active_group:"))
+async def set_active_group_cb(cq: types.CallbackQuery):
+    user_id = cq.from_user.id
+    gid = int(cq.data.split(":")[1])
+    # check membership
+    try:
+        member = await bot.get_chat_member(gid, user_id)
+        if member.status in ("left", "kicked"):
+            await cq.answer("شما دیگر در این گروه نیستید.", show_alert=True)
+            return
+    except Exception:
+        await cq.answer("خطا در بررسی عضویت.", show_alert=True)
+        return
+    user_active_group[user_id] = gid
+    await cq.answer("گروه فعال تنظیم شد ✅")
+    await cq.message.edit_text("گروه فعال شما تنظیم شد. اکنون /panel را در خصوصی یا گروه اجرا کن.")
+
+@dp.message(Command("panel"))
+async def cmd_panel(message: types.Message):
+    # Panel must be used in group for group features or private to manage active group
+    if message.chat.type == "private":
+        gid = user_active_group.get(message.from_user.id)
+        if not gid:
+            await message.answer("ابتدا یک گروه فعال انتخاب کن (از /start یا دکمه‌های پیام قبل).")
+            return
+        chat_id = gid
+    else:
+        chat_id = message.chat.id
+
+    if not await check_bot_admin(chat_id, message):
+        # still show limited panel if bot not admin
+        await message.answer("پنل محدود: برای عملکرد کامل، ربات باید ادمین باشد.")
+    # show simple panel
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📦 موجودی من", callback_data="panel_inventory")],
+        [InlineKeyboardButton(text="⚒️ ساخت دکل نفت", callback_data="panel_build_rig")],
+        [InlineKeyboardButton(text="⚔️ حمله", callback_data="panel_attack")],
+        [InlineKeyboardButton(text="🎯 ماموریت‌ها", callback_data="panel_missions")],
+        [InlineKeyboardButton(text="❓ کوییز گروهی", callback_data="panel_quiz")],
+    ])
+    await message.answer("پنل فرماندهی حاضر است. چه عملی می‌خواهی انجام دهی؟", reply_markup=kb)
+
+# ---------- FSM: select country ----------
+@dp.message(Command("join"))
+async def cmd_join(message: types.Message, state: FSMContext):
+    if message.chat.type != "private":
+        await message.answer("این دستور در چت خصوصی استفاده می‌شود. ابتدا گروه فعال انتخاب کن.")
+        return
+    gid = user_active_group.get(message.from_user.id)
+    if not gid:
+        await message.answer("ابتدا یک گروه فعال انتخاب کن.")
+        return
+    # show country selection
+    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text=c, callback_data=f"select_country:{c}")] for c in COUNTRIES])
+    await state.set_state(CountryFSM.waiting_for_country)
+    await state.update_data(chat_id=gid)
+    await message.answer("کشور خود را انتخاب کن 🇺🇳", reply_markup=kb)
+
+@dp.callback_query(lambda c: c.data and c.data.startswith("select_country:"))
+async def select_country_cb(cq: types.CallbackQuery, state: FSMContext):
+    user_id = cq.from_user.id
+    country = cq.data.split(":", 1)[1]
+    data = await state.get_data()
+    chat_id = data.get("chat_id") or user_active_group.get(user_id)
+    if not chat_id:
+        await cq.answer("گروه فعال پیدا نشد.", show_alert=True)
+        return
+    # Check existing names to avoid duplicate name
+    # We'll suffix with number if same country name exists
+    count_row = await db.fetchrow("SELECT COUNT(*)::INT AS c FROM user_profiles WHERE chat_id=$1 AND country=$2", chat_id, country)
+    count = count_row["c"] if count_row else 0
+    final_country = country if count == 0 else f"{country}{count+1}"
+    # store profile
+    await create_default_profile(user_id, chat_id, final_country)
+    await db.execute("INSERT INTO temp_profiles(user_id, chat_id, country) VALUES($1,$2,$3) ON CONFLICT (user_id, chat_id) DO UPDATE SET country=$3", user_id, chat_id, final_country)
+    # update global users table as well
+    await ensure_user_global(cq.from_user)
+    user_active_group[user_id] = chat_id
+    await state.clear()
+    await cq.answer(f"کشور «{final_country}» ساخته شد ✅")
+    await bot.send_message(chat_id, f"فرمانده {cq.from_user.first_name} به گروه پیوست با کشور {final_country}! خوش اومدی 👋")
+
+# ---------- Profile / Inventory ----------
+@dp.callback_query(lambda c: c.data == "panel_inventory")
+async def panel_inventory_cb(cq: types.CallbackQuery):
+    user_id = cq.from_user.id
+    gid = user_active_group.get(user_id)
+    if not gid:
+        await cq.answer("گروه فعال پیدا نشد.", show_alert=True)
+        return
+    profile = await get_user_profile(user_id, gid)
+    if not profile:
+        await cq.answer("پروفایل در گروه پیدا نشد؛ ابتدا با /join کشور انتخاب کن.", show_alert=True)
+        return
+    txt = (f"📜 پروفایل {cq.from_user.first_name} در گروه:\n"
+           f"کشور: {profile['country']}\n"
+           f"سطح: {profile['level']}\n"
+           f"پول: {format_money(profile['money'], profile['country'])}\n"
+           f"نفت: {profile['oil']:.2f} واحد\n"
+           f"موشک‌ها: {profile['missiles']}\n"
+           f"جنگنده‌ها: {profile['jets']}\n"
+           f"دفاع‌ها: {profile['defenses']}\n")
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=f"خرید موشک ({MISSILE_PRICE} USD)", callback_data="buy_missile")],
+        [InlineKeyboardButton(text=f"خرید جنگنده ({JET_PRICE} USD)", callback_data="buy_jet")],
+        [InlineKeyboardButton(text="فروختن نفت", callback_data="sell_oil")],
+    ])
+    await cq.answer()
+    await cq.message.answer(txt, reply_markup=kb)
+
+@dp.callback_query(lambda c: c.data == "buy_missile")
+async def buy_missile_cb(cq: types.CallbackQuery):
+    user_id = cq.from_user.id
+    gid = user_active_group.get(user_id)
+    if not gid:
+        await cq.answer("گروه فعال مشخص نیست.", show_alert=True)
+        return
+    profile = await get_user_profile(user_id, gid)
+    if not profile:
+        await cq.answer("ابتدا کشور انتخاب کن (/join).", show_alert=True)
+        return
+    if profile["money"] < MISSILE_PRICE:
+        await cq.answer("پول کافی نداری 😢", show_alert=True)
+        return
+    await db.execute("UPDATE user_profiles SET money=money-$2, missiles=missiles+1 WHERE user_id=$1 AND chat_id=$3", user_id, MISSILE_PRICE, gid)
+    await cq.answer("موشک خریدی! بزن بریم 💥")
+
+@dp.callback_query(lambda c: c.data == "buy_jet")
+async def buy_jet_cb(cq: types.CallbackQuery):
+    user_id = cq.from_user.id
+    gid = user_active_group.get(user_id)
+    if not gid:
+        await cq.answer("گروه فعال مشخص نیست.", show_alert=True)
+        return
+    profile = await get_user_profile(user_id, gid)
+    if not profile:
+        await cq.answer("ابتدا کشور انتخاب کن (/join).", show_alert=True)
+        return
+    if profile["money"] < JET_PRICE:
+        await cq.answer("پول کافی نداری 😢", show_alert=True)
+        return
+    await db.execute("UPDATE user_profiles SET money=money-$2, jets=jets+1 WHERE user_id=$1 AND chat_id=$3", user_id, JET_PRICE, gid)
+    await cq.answer("جنگنده خریدی! آسمون مال تو ✈️")
+
+@dp.callback_query(lambda c: c.data == "sell_oil")
+async def sell_oil_cb(cq: types.CallbackQuery):
+    user_id = cq.from_user.id
+    gid = user_active_group.get(user_id)
+    if not gid:
+        await cq.answer("گروه فعال مشخص نیست.", show_alert=True)
+        return
+    profile = await get_user_profile(user_id, gid)
+    if not profile:
+        await cq.answer("ابتدا کشور انتخاب کن (/join).", show_alert=True)
+        return
+    # ask how much to sell: provide quickbuttons
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="فروش 10 نفت", callback_data="sell_oil_qty:10")],
+        [InlineKeyboardButton(text="فروش 50 نفت", callback_data="sell_oil_qty:50")],
+        [InlineKeyboardButton(text="فروش همه", callback_data="sell_oil_qty:all")],
+    ])
+    await cq.answer()
+    await cq.message.answer("چقدر نفت می‌خوای بفروشی؟", reply_markup=kb)
+
+@dp.callback_query(lambda c: c.data and c.data.startswith("sell_oil_qty:"))
+async def sell_oil_qty_cb(cq: types.CallbackQuery):
+    user_id = cq.from_user.id
+    gid = user_active_group.get(user_id)
+    if not gid:
+        await cq.answer("گروه فعال مشخص نیست.", show_alert=True)
+        return
+    qty_str = cq.data.split(":", 1)[1]
+    profile = await get_user_profile(user_id, gid)
+    if not profile:
+        await cq.answer("پروفایل پیدا نشد.", show_alert=True)
+        return
+    if qty_str == "all":
+        qty = profile["oil"]
+    else:
+        qty = float(qty_str)
+    if qty <= 0 or profile["oil"] < qty:
+        await cq.answer("نفت کافی نداری.", show_alert=True)
+        return
+    revenue = qty * OIL_SELL_PRICE
+    await db.execute("UPDATE user_profiles SET oil=oil-$2, money=money+$3 WHERE user_id=$1 AND chat_id=$4", user_id, qty, revenue, gid)
+    await cq.answer(f"فروختی {qty} نفت و {revenue:.2f} پول گرفتی. پولتو خرج سربازی خوب کن 😎")
+
+# ---------- Attacks ----------
+def _now():
+    return datetime.utcnow()
+
+async def can_attack_target(attacker_id: int, target_id: int, chat_id: int) -> bool:
+    row = await db.fetchrow("SELECT last_attack FROM attack_cooldowns WHERE attacker_id=$1 AND target_id=$2 AND chat_id=$3", attacker_id, target_id, chat_id)
+    if not row:
+        return True
+    last_attack = row["last_attack"]
+    if (datetime.utcnow() - last_attack).total_seconds() >= ATTACK_TARGET_COOLDOWN:
+        return True
+    return False
+
+async def update_attack_cooldown(attacker_id: int, target_id: int, chat_id: int):
+    now = datetime.utcnow()
+    await db.execute("INSERT INTO attack_cooldowns(attacker_id, target_id, chat_id, last_attack) VALUES($1,$2,$3,$4) "
+                     "ON CONFLICT (attacker_id, target_id, chat_id) DO UPDATE SET last_attack=$4",
+                     attacker_id, target_id, chat_id, now)
+
+# Attack command (reply to a user's message or mention by user id)
+@dp.callback_query(lambda c: c.data == "panel_attack")
+async def panel_attack_cb(cq: types.CallbackQuery):
+    # in group context, present instructions; in private ask active group
+    user_id = cq.from_user.id
+    gid = user_active_group.get(user_id)
+    if not gid:
+        await cq.answer("ابتدا گروه فعال انتخاب کن.", show_alert=True)
+        return
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="حمله با موشک", callback_data="attack_choose:missile")],
+        [InlineKeyboardButton(text="حمله با جنگنده", callback_data="attack_choose:jet")],
+        [InlineKeyboardButton(text="حمله لفظی (رایگان)", callback_data="attack_choose:verbal")],
+    ])
+    await cq.answer()
+    await cq.message.answer("برای حمله، ابتدا هدف را مشخص کن: در گروه هدف را منشن یا ریپلای کن و سپس نوع حمله را انتخاب کن. (در پیام خصوصی: /attack <group_id> <target_user_id>)", reply_markup=kb)
+
+@dp.message(Command("attack"))
+async def cmd_attack(message: types.Message):
+    # Usage: /attack <group_id> <target_user_id>  OR in group, reply and use inline
+    if message.chat.type == "private":
+        parts = message.text.split()
+        if len(parts) < 3:
+            await message.answer("استفاده: /attack <group_id> <target_user_id>")
+            return
+        gid = int(parts[1])
+        target_id = int(parts[2])
+        user_id = message.from_user.id
+        profile = await get_user_profile(user_id, gid)
+        if not profile:
+            await message.answer("پروفایل در آن گروه پیدا نشد. ابتدا /join در مخصوص انجام دهید.")
+            return
+        # ask for attack type
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="موشک", callback_data=f"do_attack:{gid}:{target_id}:missile")],
+            [InlineKeyboardButton(text="جنگنده", callback_data=f"do_attack:{gid}:{target_id}:jet")],
+            [InlineKeyboardButton(text="لفظی", callback_data=f"do_attack:{gid}:{target_id}:verbal")],
+        ])
+        await message.answer("نوع حمله را انتخاب کن:", reply_markup=kb)
+    else:
+        # in group, ask user to reply to target message when choosing type. We'll instruct user.
+        await message.answer("برای حمله در گروه: به پیام هدف ریپلای کن و دکمهٔ حمله را از پنل انتخاب کن یا از /attack در خصوصی استفاده کن.")
+
+@dp.callback_query(lambda c: c.data and c.data.startswith("do_attack:"))
+async def do_attack_cb(cq: types.CallbackQuery):
+    # format: do_attack:<chat_id>:<target_id>:<type>
+    parts = cq.data.split(":")
+    if len(parts) != 4:
+        await cq.answer("فرمت نادرست.", show_alert=True)
+        return
+    chat_id = int(parts[1])
+    target_id = int(parts[2])
+    attack_type = parts[3]
+    attacker_id = cq.from_user.id
+
+    # check basic profile
+    attacker_profile = await get_user_profile(attacker_id, chat_id)
+    target_profile = await get_user_profile(target_id, chat_id)
+    if not attacker_profile:
+        await cq.answer("شما در این گروه پروفایل ندارید. /join کن.", show_alert=True)
+        return
+    if not target_profile:
+        await cq.answer("هدف در این گروه پروفایل ندارد.", show_alert=True)
+        return
+    if attacker_id == target_id:
+        await cq.answer("به خودت حمله نمی‌کنی، فرمانده؟ 🤨", show_alert=True)
+        return
+
+    # verbal attack handling (free but with cooldown global)
+    if attack_type == "verbal":
+        # per-attacker global cooldown
+        row = await db.fetchrow("SELECT last_verbal FROM verbal_cooldowns WHERE user_id=$1", attacker_id)
+        if row and (datetime.utcnow() - row["last_verbal"]).total_seconds() < VERBAL_COOLDOWN:
+            await cq.answer("چند ثانیه صبر کن تا دوباره فحش بدی 😅", show_alert=True)
+            return
+        # reward small money, update target defense maybe?
+        reward = VERBAL_REWARD
+        await db.execute("UPDATE user_profiles SET money=money+$2 WHERE user_id=$1 AND chat_id=$3", attacker_id, reward, chat_id)
+        now = datetime.utcnow()
+        await db.execute("INSERT INTO verbal_cooldowns(user_id, last_verbal) VALUES($1,$2) ON CONFLICT (user_id) DO UPDATE SET last_verbal=$2", attacker_id, now)
+        await cq.answer(f"حمله لفظی انجام شد! {reward:.2f} پول جایزه گرفتی. (به سبکِ زرنگِ دیپلماتیک 😂)")
+        # check missions (first-to-do)
+        await try_complete_mission(chat_id, attacker_id, "verbal")
+        return
+
+    # check per-target cooldown
+    if not await can_attack_target(attacker_id, target_id, chat_id):
+        await cq.answer("نمی‌تونی همین حالا دوباره به همین هدف حمله کنی — ۳۰ دقیقه باید صبر کنی.", show_alert=True)
+        return
+
+    # perform missile or jet attack
+    # determine available weapons and costs
+    if attack_type == "missile":
+        if attacker_profile["missiles"] <= 0:
+            await cq.answer("تو موشکی نداری. از پنل خرید کن.", show_alert=True)
+            return
+        damage_pct = MISSILE_DAMAGE
+        oil_cost = MISSILE_OIL_COST
+        # consume 1 missile
+        weapon_field = "missiles"
+        weapon_consumption = 1
+    elif attack_type == "jet":
+        if attacker_profile["jets"] <= 0:
+            await cq.answer("تو جنگنده نداری. از پنل خرید کن.", show_alert=True)
+            return
+        damage_pct = JET_DAMAGE
+        oil_cost = JET_OIL_COST
+        weapon_field = "jets"
+        weapon_consumption = 1
+    else:
+        await cq.answer("نوع حمله نامعتبر است.", show_alert=True)
+        return
+
+    # check oil for attack
+    if attacker_profile["oil"] < oil_cost:
+        await cq.answer("نفت کافی برای انجام حمله نداری.", show_alert=True)
+        return
+
+    # now execute transfer in transaction to avoid race conditions
+    conn, tr = await db.transaction()
+    try:
+        # re-fetch under connection to ensure latest values
+        attacker_row = await conn.fetchrow("SELECT missiles, jets, oil, money FROM user_profiles WHERE user_id=$1 AND chat_id=$2 FOR UPDATE", attacker_id, chat_id)
+        target_row = await conn.fetchrow("SELECT oil, money FROM user_profiles WHERE user_id=$1 AND chat_id=$2 FOR UPDATE", target_id, chat_id)
+        if not attacker_row or not target_row:
+            await tr.rollback()
+            await conn.close()
+            await cq.answer("خطا در خواندن پروفایل‌ها. دوباره تلاش کن.", show_alert=True)
+            return
+
+        # recalc with locked rows
+        if attack_type == "missile" and attacker_row["missiles"] <= 0:
+            await tr.rollback()
+            await conn.close()
+            await cq.answer("کسی قبل از شما موشک‌ها را استفاده کرده 😅", show_alert=True)
+            return
+        if attack_type == "jet" and attacker_row["jets"] <= 0:
+            await tr.rollback()
+            await conn.close()
+            await cq.answer("کسی قبل از شما جنگنده‌ها را استفاده کرده 😅", show_alert=True)
+            return
+        if attacker_row["oil"] < oil_cost:
+            await tr.rollback()
+            await conn.close()
+            await cq.answer("نفت کافی برای اجرای حمله وجود ندارد.", show_alert=True)
+            return
+
+        # compute loot: based on damage percent and resources of target
+        # target loses proportion of money and oil based on damage_pct, but cannot lose all -> cap at 50% of resource maybe.
+        # rules: "غارت به درصد تخریب بستگی دارد. هیچ کشوری نمی‌تواند کل منابع کشور دیگر را فتح کند."
+        # implement: lootable fraction = min(damage_pct, 0.5) * target_resource
+        cap = 0.5
+        effective_pct = min(damage_pct, cap)
+        oil_loot = target_row["oil"] * effective_pct
+        money_loot = target_row["money"] * effective_pct
+
+        # update attacker and target
+        # consume weapon and oil from attacker
+        if attack_type == "missile":
+            await conn.execute("UPDATE user_profiles SET missiles=missiles-1, oil=oil-$3 WHERE user_id=$1 AND chat_id=$2", attacker_id, chat_id, oil_cost)
+        else:
+            await conn.execute("UPDATE user_profiles SET jets=jets-1, oil=oil-$3 WHERE user_id=$1 AND chat_id=$2", attacker_id, chat_id, oil_cost)
+
+        # remove resources from target and give to attacker (loot)
+        await conn.execute("UPDATE user_profiles SET oil=GREATEST(oil-$2,0), money=GREATEST(money-$3,0) WHERE user_id=$1 AND chat_id=$4", target_id, oil_loot, money_loot, chat_id)
+        await conn.execute("UPDATE user_profiles SET oil=oil+$2, money=money+$3 WHERE user_id=$1 AND chat_id=$4", attacker_id, oil_loot, money_loot, chat_id)
+
+        # update attack cooldown
+        now = datetime.utcnow()
+        await conn.execute("INSERT INTO attack_cooldowns(attacker_id, target_id, chat_id, last_attack) VALUES($1,$2,$3,$4) ON CONFLICT (attacker_id, target_id, chat_id) DO UPDATE SET last_attack=$4", attacker_id, target_id, chat_id, now)
+
+        await tr.commit()
+        await conn.close()
+    except Exception as e:
+        logger.exception("attack transaction failed")
+        try:
+            await tr.rollback()
+            await conn.close()
+        except Exception:
+            pass
+        await cq.answer("خطایی رخ داد؛ دوباره تلاش کن.", show_alert=True)
+        return
+
+    # success message
+    await cq.answer(f"حمله با {attack_type} انجام شد! \nغارت: {money_loot:.2f} پول و {oil_loot:.2f} نفت به دست آمد.", show_alert=True)
+    # announce in group
+    try:
+        await bot.send_message(chat_id, f"💥 حمله‌ای توسط {cq.from_user.first_name} به {target_id} صورت گرفت! \nغارت: {money_loot:.2f} پول و {oil_loot:.2f} نفت.")
+    except Exception:
+        pass
+
+    # mission checks
+    await try_complete_mission(chat_id, attacker_id, attack_type)
+
+# ---------- Missions ----------
+async def try_complete_mission(chat_id: int, user_id: int, action_type: str):
+    # we consider simple missions types: 'attack', 'verbal', 'jet', 'missile'
+    # find pending mission for chat
+    mission_rows = await db.fetch("SELECT m.* FROM missions m LEFT JOIN group_missions gm ON gm.mission_id=m.id AND gm.chat_id=$1 WHERE gm.status IS NULL OR gm.status='pending'", chat_id)
+    if not mission_rows:
+        return
+    for m in mission_rows:
+        # simple matching: if mission.type contains action_type or is generic
+        if m["type"] in (None, "", "generic") or action_type in (m["type"], "attack", "verbal"):
+            # try to insert group_missions as completed by first completer
+            try:
+                await db.execute("INSERT INTO group_missions(chat_id, mission_id, user_id, status) VALUES($1,$2,$3,$4) ON CONFLICT (chat_id, mission_id) DO NOTHING", chat_id, m["id"], user_id, "completed")
+                # reward
+                await db.execute("UPDATE user_profiles SET money=money+$2, oil=oil+$3 WHERE user_id=$1 AND chat_id=$4", user_id, m["reward_money"], m["reward_oil"], chat_id)
+                try:
+                    await bot.send_message(chat_id, f"🏆 ماموریت گروهی انجام شد! برنده: user({user_id}). جایزه: {m['reward_money']} پول و {m['reward_oil']} نفت.")
+                except Exception:
+                    pass
+            except Exception:
+                logger.exception("mission completion failed")
+            # only first matching mission processed
+            break
+
+async def run_group_missions(chat_id: int):
+    # periodic enabling of a mission in the group
+    while True:
+        try:
+            # select a random mission from missions table
+            m = await db.fetchrow("SELECT * FROM missions ORDER BY RANDOM() LIMIT 1")
+            if m:
+                # insert as pending in group_missions
+                await db.execute("INSERT INTO group_missions(chat_id, mission_id, user_id, status) VALUES($1,$2,$3,$4) ON CONFLICT (chat_id, mission_id) DO UPDATE SET status='pending', user_id=NULL", chat_id, m["id"], None, "pending")
+                # announce
+                try:
+                    await bot.send_message(chat_id, f"🎯 ماموریت جدید: {m['text']}\nاولین کسی که انجام دهد جایزه می‌گیرد: {m['reward_money']} پول و {m['reward_oil']} نفت.")
+                except Exception:
+                    pass
+            await asyncio.sleep(MISSION_INTERVAL_SECONDS + random.randint(-60, 60))
+        except asyncio.CancelledError:
+            break
+        except Exception:
+            logger.exception("run_group_missions error")
+            await asyncio.sleep(30)
+
+# ---------- Quizzes ----------
+async def run_group_challenges(chat_id: int):
+    while True:
+        try:
+            # pick a random challenge
+            c = await db.fetchrow("SELECT * FROM challenges ORDER BY RANDOM() LIMIT 1")
+            if not c:
+                # if no challenges defined, insert a default
+                await db.execute("INSERT INTO challenges(text, answer, reward_money, reward_oil) VALUES($1,$2,$3,$4)", "چه رنگی آسمان است؟", "آبی", 10.0, 5.0)
+                await asyncio.sleep(10)
+                continue
+            start = datetime.utcnow()
+            end = start + timedelta(seconds=QUIZ_INTERVAL_SECONDS // 2)
+            # send question
+            try:
+                msg = await bot.send_message(chat_id, f"❓ کوییز گروهی:\n{c['text']}\n(پاسخ را در این چت تایپ کنید)")
+                msg_id = msg.message_id
+            except Exception:
+                msg_id = None
+            # store active challenge
+            await db.execute("INSERT INTO group_challenges(chat_id, challenge_id, message_id, start_time, end_time, active) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT (chat_id) DO UPDATE SET challenge_id=$2, message_id=$3, start_time=$4, end_time=$5, active=$6", chat_id, c["id"], msg_id, start, end, 1)
+            # wait until end or someone answers
+            await asyncio.sleep(QUIZ_INTERVAL_SECONDS // 2)
+            # if still active, mark inactive
+            await db.execute("UPDATE group_challenges SET active=0 WHERE chat_id=$1 AND challenge_id=$2", chat_id, c["id"])
+            await asyncio.sleep(QUIZ_INTERVAL_SECONDS + random.randint(-60, 60))
+        except asyncio.CancelledError:
+            break
+        except Exception:
+            logger.exception("run_group_challenges error")
+            await asyncio.sleep(30)
+
+@dp.message()
+async def all_messages_handler(message: types.Message):
+    # process quiz answers in group
+    if message.chat.type != "private":
+        # check if there's an active challenge
+        gc = await db.fetchrow("SELECT gc.*, c.answer FROM group_challenges gc JOIN challenges c ON c.id=gc.challenge_id WHERE gc.chat_id=$1 AND gc.active=1", message.chat.id)
+        if gc and gc.get("answer"):
+            answer = gc["answer"].strip().lower()
+            # simple normalization
+            candidate = (message.text or "").strip().lower()
+            if candidate and candidate == answer:
+                # give reward to first correct answer: ensure atomic
+                conn, tr = await db.transaction()
+                try:
+                    # double-check still active
+                    cur = await conn.fetchrow("SELECT active FROM group_challenges WHERE chat_id=$1 AND challenge_id=$2 FOR UPDATE", message.chat.id, gc["challenge_id"])
+                    if not cur or cur["active"] == 0:
+                        await tr.rollback()
+                        await conn.close()
+                        return
+                    # award
+                    await conn.execute("UPDATE group_challenges SET active=0 WHERE chat_id=$1 AND challenge_id=$2", message.chat.id, gc["challenge_id"])
+                    await conn.execute("UPDATE user_profiles SET money=money+$2, oil=oil+$3 WHERE user_id=$1 AND chat_id=$4", message.from_user.id, gc["reward_money"], gc["reward_oil"], message.chat.id)
+                    await tr.commit()
+                    await conn.close()
+                    await bot.send_message(message.chat.id, f"🎉 {message.from_user.first_name} پاسخ درست داد و {gc['reward_money']} پول و {gc['reward_oil']} نفت جایزه گرفت!")
+                except Exception:
+                    try:
+                        await tr.rollback()
+                        await conn.close()
+                    except Exception:
+                        pass
+                    logger.exception("quiz awarding failed")
+    # Also could process mission triggers from chat messages (like "attack", "help" keywords), but we'll keep minimal.
+
+# ---------- Oil Rigs (Build / Upgrade / Destroy) ----------
+@dp.callback_query(lambda c: c.data == "panel_build_rig")
+async def panel_build_rig_cb(cq: types.CallbackQuery):
+    user_id = cq.from_user.id
+    gid = user_active_group.get(user_id)
+    if not gid:
+        await cq.answer("ابتدا گروه فعال انتخاب کن.", show_alert=True)
+        return
+    # show build options
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="ساخت دکل سطح 2 (200 پول)", callback_data="build_rig:2")],
+        [InlineKeyboardButton(text="ساخت دکل سطح 3 (500 پول)", callback_data="build_rig:3")],
+    ])
+    await cq.answer()
+    await cq.message.answer("انتخاب کن چه دکلی بسازی:", reply_markup=kb)
+
+@dp.callback_query(lambda c: c.data and c.data.startswith("build_rig:"))
+async def build_rig_cb(cq: types.CallbackQuery):
+    user_id = cq.from_user.id
+    level = int(cq.data.split(":")[1])
+    gid = user_active_group.get(user_id)
+    if not gid:
+        await cq.answer("گروه فعال مشخص نیست.", show_alert=True)
+        return
+    # pricing and properties
+    if level == 2:
+        price = 200.0
+        hp = 1500
+        cap = 200
+        speed = 1.5
+    elif level == 3:
+        price = 500.0
+        hp = 2500
+        cap = 500
+        speed = 2.0
+    else:
+        await cq.answer("سطح نامعتبر.", show_alert=True)
+        return
+    profile = await get_user_profile(user_id, gid)
+    if not profile:
+        await cq.answer("ابتدا کشور انتخاب کن (/join).", show_alert=True)
+        return
+    if profile["money"] < price:
+        await cq.answer("پول کافی نداری.", show_alert=True)
+        return
+    await db.execute("UPDATE user_profiles SET money=money-$2 WHERE user_id=$1 AND chat_id=$3", user_id, price, gid)
+    await db.execute("INSERT INTO oil_rigs(owner_id, level, hp, capacity, extraction_speed, invulnerable) VALUES($1,$2,$3,$4,$5,$6)", user_id, level, hp, cap, speed, 0)
+    await cq.answer(f"دکل سطح {level} ساخته شد! نفتت داره با کلاس استخراج میشه ⛽️")
+
+# ---------- Startup / Bootstrap ----------
+async def bootstrap_group_tasks():
+    groups = await db.fetch("SELECT chat_id FROM groups WHERE active=TRUE")
     for g in groups:
         chat_id = g["chat_id"]
+        # launch tasks but avoid duplicates
         if chat_id not in group_challenge_tasks:
             group_challenge_tasks[chat_id] = asyncio.create_task(run_group_challenges(chat_id))
         if chat_id not in group_mission_tasks:
             group_mission_tasks[chat_id] = asyncio.create_task(run_group_missions(chat_id))
 
-    print("Start polling...")
+# ---------- Add some seed data for missions and challenges if empty ----------
+async def seed_data():
+    # add basic missions if none
+    m = await db.fetchrow("SELECT id FROM missions LIMIT 1")
+    if not m:
+        await db.execute("INSERT INTO missions(text, reward_money, reward_oil, type) VALUES($1,$2,$3,$4)", "انجام یک حمله عادی (موشک یا جنگنده)", 100.0, 50.0, "attack")
+        await db.execute("INSERT INTO missions(text, reward_money, reward_oil, type) VALUES($1,$2,$3,$4)", "انجام یک حمله لفظی", 20.0, 5.0, "verbal")
+    ch = await db.fetchrow("SELECT id FROM challenges LIMIT 1")
+    if not ch:
+        await db.execute("INSERT INTO challenges(text, answer, reward_money, reward_oil) VALUES($1,$2,$3,$4)", "چه رنگی آسمان است؟", "آبی", 10.0, 5.0)
+
+# ---------- Main ----------
+async def main():
+    await init_db()
+    await seed_data()
+    await bootstrap_group_tasks()
     await bot.delete_webhook(drop_pending_updates=True)
+    logger.info("Starting polling...")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
     try:
         asyncio.run(main())
     except (KeyboardInterrupt, SystemExit):
-        print("Bot stopped!")
-
-
-
-
-
-
-
+        logger.info("Bot stopped")
