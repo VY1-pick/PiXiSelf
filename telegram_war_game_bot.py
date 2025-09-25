@@ -94,6 +94,7 @@ async def init_db():
         chat_id BIGINT PRIMARY KEY,
         title TEXT,
         username TEXT
+        active BOOLEAN DEFAULT TRUE
     )
     """)
 
@@ -621,8 +622,8 @@ async def bot_membership_changed(event: ChatMemberUpdated):
     # وقتی تازه به گروه اضافه شد (اما هنوز ادمین نیست)
     if new_status == "member":
         await db.execute(
-            "INSERT INTO groups(chat_id, active) VALUES($1, $2) ON CONFLICT (chat_id) DO UPDATE SET active=$2",
-            (chat_id, True)
+            "INSERT INTO groups(chat_id, title, username, active) VALUES ($1, $2, $3, $4) ON CONFLICT (chat_id) DO UPDATE SET title=$2, username=$3, active=$4,
+            (chat.id, chat.title or "", chat.username or "")
         )
         await bot.send_message(chat_id, "من به گروه اضافه شدم ✅\nبرای اینکه بتونم فرماندهی کنم، منو ادمین کنین ⚔️")
 
@@ -655,12 +656,11 @@ async def main():
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
-    import logging
-    logging.basicConfig(level=logging.INFO)
     try:
         asyncio.run(main())
     except (KeyboardInterrupt, SystemExit):
         print("Bot stopped!")
+
 
 
 
