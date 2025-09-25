@@ -1,542 +1,499 @@
-# bot.py
-
+# امیرو - bot.py
 import os
 import asyncio
-import logging
 import random
-from datetime import datetime, timezone
-import asyncpg
+import datetime
+import json
+from typing import Optional, List, Tuple, Dict, Any
+
+from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
-from aiogram import Bot, Dispatcher, types, F
-from aiogram.enums import ParseMode
-from aiogram.filters import Command, CommandStart
-from aiogram.fsm.context import FSMContext
-from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import (
-    Message,
-    InlineKeyboardMarkup,
-    InlineKeyboardButton,
-    CallbackQuery,
-    ChatMemberUpdated,
-    ChatMemberAdministrator,
-)
-from aiogram.filters.chat_member_updated import ChatMemberUpdatedFilter, IS_NOT_MEMBER, MEMBER, ADMINISTRATOR
+from aiogram.enums import ParseMode, ChatType
+from aiogram.filters import Command
+from aiogram.types import Message
+import asyncpg
+from dotenv import load_dotenv
 
-# --- کانفیگ و تنظیمات اولیه ---
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(name)s - %(message)s",
-)
-logger = logging.getLogger(__name__)
+load_dotenv()
 
-# --- توکن و اطلاعات حساس از متغیرهای محیطی ---
-# سرباز، اینا رو باید درست تنظیم کنی. شوخی ندارم.
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 DATABASE_URL = os.getenv("DATABASE_URL")
 
-# --- ثابت‌های بازی ---
-# این بخش، مغز متفکر استراتژی ماست. دستکاری بی‌مورد ممنوع.
-INITIAL_MONEY = 10000
-INITIAL_OIL = 500
-QUIZ_REWARD = 500
-# زمان چالش‌ها به دقیقه (حداقل و حداکثر)
-QUIZ_INTERVAL_MIN_MINUTES = 20
-QUIZ_INTERVAL_MAX_MINUTES = 300
+bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+dp = Dispatcher()
 
-# دیکشنری تجهیزات بر اساس کشور
-# قدرت‌ها برای حفظ بالانس یکسان هستند، فقط نام‌ها تغییر می‌کنند
-EQUIPMENT_DATA = {
-    'آمریکا': {
-        'fighters': {
-            'F-16 Fighting Falcon': {'price': 150000, 'health': 100, 'fuel_capacity': 100, 'attack_cooldown_sec': 360, 'missile_slots': 5, 'compatible_missile': 'AIM-120 AMRAAM'},
-        },
-        'missiles': {
-            'AIM-120 AMRAAM': {'price': 5000, 'damage': 25},
-        }
-    },
-    'ایران': {
-        'fighters': {
-            'HESA Kowsar': {'price': 150000, 'health': 100, 'fuel_capacity': 100, 'attack_cooldown_sec': 360, 'missile_slots': 5, 'compatible_missile': 'Fakour-90'},
-        },
-        'missiles': {
-            'Fakour-90': {'price': 5000, 'damage': 25},
-        }
-    },
-    'روسیه': {
-        'fighters': {
-            'Sukhoi Su-35': {'price': 150000, 'health': 100, 'fuel_capacity': 100, 'attack_cooldown_sec': 360, 'missile_slots': 5, 'compatible_missile': 'R-77'},
-        },
-        'missiles': {
-            'R-77': {'price': 5000, 'damage': 25},
-        }
-    },
-    # آیتم‌های عمومی که وابسته به کشور نیستند
-    'common': {
-        'oil_rigs': {
-            # سطح: {قیمت، تجربه لازم، ظرفیت، تولید در ساعت، سلامتی}
-            2: {'price': 50000, 'xp_required': 100, 'capacity': 5000, 'production_per_hour': 500, 'health': 200},
-            3: {'price': 200000, 'xp_required': 500, 'capacity': 20000, 'production_per_hour': 2000, 'health': 500},
-        },
-        'defense': {
-            # سطح: {قیمت، تجربه لازم، درصد کاهش آسیب}
-            1: {'price': 10000, 'xp_required': 50, 'reduction': 5},
-            2: {'price': 50000, 'xp_required': 250, 'reduction': 10},
-        }
-    }
+# --- تنظیمات بازی ---
+JETS_BY_COUNTRY: Dict[str, List[str]] = {
+    "ایران": ["کوثر", "صاعقه", "آذرخش"],
+    "روسیه": ["سوخو-35", "میگ-29", "یاک-130"],
+    "آمریکا": ["F-35", "F-16", "F-22"]
+}
+MISSILES_BY_COUNTRY: Dict[str, List[str]] = {
+    "ایران": ["ذوالفقار", "خرمشهر", "قیام"],
+    "روسیه": ["اسکندر", "کالیبر", "کینجال"],
+    "آمریکا": ["تام‌هاوک", "جبلین", "پاترِئوت"]
 }
 
+# آمار پایه (متعادل)
+JET_STATS = {
+    # health, attack_time(sec), fuel_consumption_percent_per_attack, missile_slots
+    "default": (100, 30, 10, 2)
+}
+MISSILE_STATS = {
+    # damage, price
+    "default": (50, 1000)
+}
+DEFENSE_STATS = {
+    # damage_reduction_percent, counter_damage, missile_cost
+    "default": (20, 25, 800)
+}
 
-# --- کلاس مدیریت پایگاه داده ---
-# تمام عملیات جنگی ما روی این ستون‌ها بنا شده.
-class DBAdapter:
-    def __init__(self, dsn):
-        self.dsn = dsn
-        self.pool = None
+# پارامترهای دکل اولیه
+INITIAL_RIG = {
+    "level": 1,
+    "health": -1,  # -1 یعنی غیرقابل نابودی (دکل اولیه)
+    "capacity": 1000,
+    "production": 1
+}
 
-    async def connect(self):
-        try:
-            self.pool = await asyncpg.create_pool(self.dsn)
-            logger.info("اتصال به پایگاه داده برقرار شد. آماده دریافت دستورات.")
-        except Exception as e:
-            logger.critical(f"خطای فاجعه‌بار در اتصال به دیتابیس: {e}")
-            raise
+# متغیر کلی اتصال دیتابیس
+db_pool: Optional[asyncpg.Pool] = None
 
-    async def close(self):
-        if self.pool:
-            await self.pool.close()
-            logger.info("اتصال به پایگاه داده قطع شد. پایان عملیات.")
+# --- دیتابیس ---
+async def create_db_pool() -> asyncpg.Pool:
+    return await asyncpg.create_pool(DATABASE_URL)
 
-    async def execute(self, query, *args):
-        async with self.pool.acquire() as conn:
-            async with conn.transaction():
-                return await conn.execute(query, *args)
+async def setup_tables(pool: asyncpg.Pool):
+    async with pool.acquire() as conn:
+        await conn.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            user_id BIGINT PRIMARY KEY,
+            country TEXT DEFAULT 'ایران',
+            exp BIGINT DEFAULT 0,
+            money BIGINT DEFAULT 0
+        );
+        """)
+        await conn.execute("""
+        CREATE TABLE IF NOT EXISTS rigs (
+            user_id BIGINT PRIMARY KEY,
+            level INT DEFAULT 1,
+            health INT DEFAULT -1,
+            oil BIGINT DEFAULT 0,
+            capacity INT DEFAULT 1000,
+            production INT DEFAULT 1
+        );
+        """)
+        await conn.execute("""
+        CREATE TABLE IF NOT EXISTS fighters (
+            id SERIAL PRIMARY KEY,
+            user_id BIGINT,
+            name TEXT,
+            health INT,
+            last_attack TIMESTAMP,
+            fuel_percent INT DEFAULT 100,
+            missiles JSONB DEFAULT '[]'::jsonb
+        );
+        """)
+        await conn.execute("""
+        CREATE TABLE IF NOT EXISTS defenses (
+            user_id BIGINT PRIMARY KEY,
+            reduction_percent INT DEFAULT 0,
+            missiles JSONB DEFAULT '[]'::jsonb
+        );
+        """)
+        await conn.execute("""
+        CREATE TABLE IF NOT EXISTS group_missions (
+            chat_id BIGINT,
+            mission_id BIGINT,
+            status TEXT,
+            PRIMARY KEY (chat_id, mission_id)
+        );
+        """)
+        await conn.execute("""
+        CREATE TABLE IF NOT EXISTS groups (
+            chat_id BIGINT PRIMARY KEY
+        );
+        """)
 
-    async def fetch(self, query, *args):
-        async with self.pool.acquire() as conn:
-            return await conn.fetch(query, *args)
+# --- کمک‌کننده‌ها ---
+async def add_user_if_missing(pool: asyncpg.Pool, user_id: int, country: str = "ایران"):
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            await conn.execute("""
+            INSERT INTO users (user_id, country) VALUES ($1, $2)
+            ON CONFLICT (user_id) DO NOTHING;
+            """, user_id, country)
+            await conn.execute("""
+            INSERT INTO rigs (user_id, level, health, oil, capacity, production)
+            VALUES ($1, $2, $3, $4, $5, $6)
+            ON CONFLICT (user_id) DO NOTHING;
+            """, user_id, INITIAL_RIG["level"], INITIAL_RIG["health"], 0, INITIAL_RIG["capacity"], INITIAL_RIG["production"])
+            # defenses default row not created until needed
 
-    async def fetchrow(self, query, *args):
-        async with self.pool.acquire() as conn:
-            return await conn.fetchrow(query, *args)
-
-    async def fetchval(self, query, *args):
-        async with self.pool.acquire() as conn:
-            return await conn.fetchval(query, *args)
-
-    async def setup_schema(self):
-        # بازسازی ساختار پایگاه داده برای عملیات جدید
-        schema_queries = [
-            """
-            CREATE TABLE IF NOT EXISTS users (
-                user_id BIGINT PRIMARY KEY,
-                country TEXT,
-                money BIGINT DEFAULT 0,
-                oil BIGINT DEFAULT 0,
-                xp INT DEFAULT 0,
-                defense_level INT DEFAULT 0,
-                active_group BIGINT,
-                last_updated TIMESTAMP WITH TIME ZONE
-            );
-            """,
-            """
-            CREATE TABLE IF NOT EXISTS oil_rigs (
-                rig_id SERIAL PRIMARY KEY,
-                owner_id BIGINT REFERENCES users(user_id) ON DELETE CASCADE,
-                level INT NOT NULL,
-                health INT, -- NULL for invulnerable rigs
-                capacity INT NOT NULL,
-                production_per_hour INT NOT NULL,
-                is_invulnerable BOOLEAN DEFAULT FALSE,
-                last_collected TIMESTAMP WITH TIME ZONE
-            );
-            """,
-            """
-            CREATE TABLE IF NOT EXISTS fighters (
-                fighter_id SERIAL PRIMARY KEY,
-                owner_id BIGINT REFERENCES users(user_id) ON DELETE CASCADE,
-                fighter_type TEXT NOT NULL,
-                health INT NOT NULL,
-                fuel INT NOT NULL,
-                last_attack_time TIMESTAMP WITH TIME ZONE
-            );
-            """,
-            """
-            CREATE TABLE IF NOT EXISTS missiles (
-                missile_id SERIAL PRIMARY KEY,
-                owner_id BIGINT REFERENCES users(user_id) ON DELETE CASCADE,
-                missile_type TEXT NOT NULL,
-                quantity INT NOT NULL,
-                UNIQUE(owner_id, missile_type)
-            );
-            """,
-            """
-            CREATE TABLE IF NOT EXISTS groups (
-                chat_id BIGINT PRIMARY KEY,
-                name TEXT,
-                is_active BOOLEAN DEFAULT TRUE
-            );
-            """,
-            """
-            CREATE TABLE IF NOT EXISTS group_missions (
-                chat_id BIGINT NOT NULL,
-                mission_id INT NOT NULL,
-                user_id BIGINT,
-                status TEXT DEFAULT 'pending',
-                PRIMARY KEY (chat_id, mission_id)
-            );
-            """,
-        ]
-        logger.info("بررسی و اجرای ساختار پایگاه داده...")
-        async with self.pool.acquire() as conn:
-            async with conn.transaction():
-                for query in schema_queries:
-                    await conn.execute(query)
-        logger.info("ساختار پایگاه داده آماده است.")
-
-    # --- متدهای مربوط به کاربر ---
-    async def create_user(self, user_id):
-        async with self.pool.acquire() as conn:
-            async with conn.transaction():
-                # ایجاد کاربر
-                await conn.execute(
-                    "INSERT INTO users (user_id, money, oil, last_updated) VALUES ($1, $2, $3, $4) ON CONFLICT (user_id) DO NOTHING",
-                    user_id, INITIAL_MONEY, INITIAL_OIL, datetime.now(timezone.utc)
-                )
-                # ایجاد دکل نفت اولیه و غیرقابل تخریب
-                # چک می‌کنیم که کاربر از قبل دکل اولیه نداشته باشد
-                has_initial_rig = await conn.fetchval(
-                    "SELECT 1 FROM oil_rigs WHERE owner_id = $1 AND is_invulnerable = TRUE", user_id
-                )
-                if not has_initial_rig:
-                    await conn.execute(
-                        """
-                        INSERT INTO oil_rigs (owner_id, level, health, capacity, production_per_hour, is_invulnerable, last_collected)
-                        VALUES ($1, 1, NULL, 1000, 100, TRUE, $2)
-                        """,
-                        user_id, datetime.now(timezone.utc)
-                    )
-
-    async def get_user(self, user_id):
-        # قبل از هر چیز، منابع کاربر رو آپدیت می‌کنیم
-        await self.update_user_resources(user_id)
-        return await self.fetchrow("SELECT * FROM users WHERE user_id = $1", user_id)
-
-    async def set_user_country(self, user_id, country):
-        await self.execute("UPDATE users SET country = $1 WHERE user_id = $2", country, user_id)
-
-    async def get_user_rigs(self, user_id):
-        return await self.fetch("SELECT * FROM oil_rigs WHERE owner_id = $1 ORDER BY level", user_id)
-
-    async def update_user_resources(self, user_id):
-        """
-        این متد حیاتی، تولید نفت و کاهش سلامتی دکل‌ها را بر اساس زمان سپری شده محاسبه می‌کند.
-        این کار به جای یک تسک پس‌زمینه انجام می‌شود تا بهینه باشد.
-        """
-        async with self.pool.acquire() as conn:
-            async with conn.transaction():
-                user = await conn.fetchrow("SELECT oil, last_updated FROM users WHERE user_id = $1", user_id)
-                if not user or not user['last_updated']:
-                    return # کاربر یا آپدیت اولیه ندارد
-
-                current_time = datetime.now(timezone.utc)
-                time_diff_seconds = (current_time - user['last_updated']).total_seconds()
-                
-                # 1. محاسبه تولید نفت
-                rigs = await conn.fetch("SELECT rig_id, production_per_hour, capacity, last_collected FROM oil_rigs WHERE owner_id = $1", user_id)
-                total_oil_produced = 0
-                for rig in rigs:
-                    production_time_seconds = (current_time - rig['last_collected']).total_seconds()
-                    # نفت تولید شده در این بازه
-                    oil_this_rig = (rig['production_per_hour'] / 3600) * production_time_seconds
-                    
-                    # استخراج موجودی نفت از دکل (بدون سرریز شدن ظرفیت کل کاربر)
-                    current_oil_in_storage = await conn.fetchval("SELECT oil FROM users WHERE user_id = $1", user_id)
-                    
-                    # ظرفیت خالی برای ذخیره نفت
-                    # اینجا باید یک منطق کلی برای ظرفیت کل تعریف کنیم، فعلا فرض می‌کنیم بی‌نهایت است
-                    # اما برای دکل، تولید نباید از ظرفیت خودش بیشتر بشه
-                    
-                    # TODO: منطق ظرفیت کلی انبار نفت
-                    
-                    total_oil_produced += oil_this_rig
-                    await conn.execute("UPDATE oil_rigs SET last_collected = $1 WHERE rig_id = $2", current_time, rig['rig_id'])
-
-                if total_oil_produced > 0:
-                    await conn.execute("UPDATE users SET oil = oil + $1 WHERE user_id = $2", int(total_oil_produced), user_id)
-
-                # 2. محاسبه کاهش سلامتی دکل‌های آسیب‌پذیر
-                # هر 2 ساعت (7200 ثانیه) 1 واحد سلامتی کم می‌شود
-                health_decay_amount = int(time_diff_seconds // 7200)
-                if health_decay_amount > 0:
-                    await conn.execute(
-                        """
-                        UPDATE oil_rigs
-                        SET health = health - $1
-                        WHERE owner_id = $2 AND is_invulnerable = FALSE AND health > 0
-                        """,
-                        health_decay_amount, user_id
-                    )
-                    # جلوگیری از منفی شدن سلامتی
-                    await conn.execute(
-                        "UPDATE oil_rigs SET health = 0 WHERE health < 0 AND owner_id = $1", user_id
-                    )
-
-                # 3. ثبت زمان آخرین آپدیت
-                await conn.execute("UPDATE users SET last_updated = $1 WHERE user_id = $2", current_time, user_id)
-
-
-# --- ماشین وضعیت برای انتخاب کشور ---
-class Form(StatesGroup):
-    choosing_country = State()
-
-# --- نمونه‌سازی‌ها ---
-bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=HTML)
-dp = Dispatcher()
-db = DBAdapter(DATABASE_URL)
-
-# --- کوئری‌های از پیش آماده شده ---
-# اینها برای ماموریت‌های گروهی استفاده می‌شوند
-MISSIONS = [
-    {"id": 1, "question": "پایتخت ایران کجاست؟", "answer": "تهران"},
-    {"id": 2, "question": "فرمانده کل قوا کیست؟", "answer": "خودم"}, # شوخی نظامی!
-    {"id": 3, "question": "کدام عدد اول است: 9 یا 11؟", "answer": "11"},
-]
-
-
-# --- کنترلرهای رویدادها (Handlers) ---
-
-@dp.message(CommandStart())
-async def command_start_handler(message: Message, state: FSMContext) -> None:
-    """
-    وقتی یک سرباز جدید به پایگاه می‌پیوندد.
-    """
-    user_id = message.from_user.id
-    await db.create_user(user_id)
-    user = await db.get_user(user_id)
-
-    if user and user['country']:
-        await message.answer(f"سرباز {message.from_user.first_name}، به پایگاه برگشتی. وقت تلف نکن. برای دیدن وضعیتت از دستور /panel استفاده کن.")
-    else:
-        keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🇮🇷 ایران", callback_data="country_ایران")],
-            [InlineKeyboardButton(text="🇺🇸 آمریکا", callback_data="country_آمریکا")],
-            [InlineKeyboardButton(text="🇷🇺 روسیه", callback_data="country_روسیه")],
-        ])
-        await message.answer("هویتت رو مشخص کن، سرباز. به کدام جبهه وفاداری؟", reply_markup=keyboard)
-        await state.set_state(Form.choosing_country)
-
-@dp.callback_query(Form.choosing_country, F.data.startswith("country_"))
-async def process_country_choice(callback: CallbackQuery, state: FSMContext):
-    country = callback.data.split("_")[1]
-    user_id = callback.from_user.id
-    await db.set_user_country(user_id, country)
-    await callback.message.edit_text(f"بسیار خب. وفاداری تو به {country} ثبت شد. حالا برو سر پستت. با دستور /panel وضعیتت رو چک کن.")
-    await state.clear()
-    await callback.answer()
-
-
-@dp.message(Command("panel"))
-async def panel_handler(message: Message):
-    """
-    پنل گزارش وضعیت سرباز.
-    """
-    if message.chat.type != 'private':
-        await message.reply("پنل شخصی فقط در چت خصوصی قابل دسترسی است، نه در میدان جنگ.")
-        return
-
-    user_id = message.from_user.id
-    user = await db.get_user(user_id)
-    if not user or not user['country']:
-        await message.answer("اول باید هویتت رو با /start مشخص کنی. سریع!")
-        return
-    
-    # واکشی اطلاعات دارایی‌ها
-    rigs = await db.get_user_rigs(user_id)
-    # fighters = await db.get_user_fighters(user_id) # TODO
-    # missiles = await db.get_user_missiles(user_id) # TODO
-
-    # ساخت متن گزارش
-    report = f"<b>گزارش وضعیت، سرباز {message.from_user.first_name}</b>\n\n"
-    report += f"<b>جبهه:</b> {user['country']}\n"
-    report += f"<b>خزانه:</b> {user['money']:,} سکه\n"
-    report += f"<b>ذخیره نفت:</b> {user['oil']:,} لیتر\n"
-    report += f"<b>درجه (XP):</b> {user['xp']}\n"
-    report += f"<b>سطح پدافند:</b> {user['defense_level']}\n\n"
-    report += "<b>--- تأسیسات نفتی ---</b>\n"
-    if rigs:
-        for rig in rigs:
-            health_status = "عملیاتی" if rig['is_invulnerable'] else f"{rig['health']}%"
-            report += f" - دکل سطح {rig['level']}: [ظرفیت: {rig['capacity']:,}] [تولید: {rig['production_per_hour']:,}/ساعت] [وضعیت: {health_status}]\n"
-    else:
-        report += "هیچ دکل نفتی‌ای در اختیار نداری. وضعیت اسفناک است.\n"
-    
-    # TODO: اضافه کردن گزارش جنگنده‌ها و موشک‌ها
-
-    # ساخت دکمه‌های عملیاتی
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="فروشگاه", callback_data="shop_main")],
-        [InlineKeyboardButton(text="حمله", callback_data="attack_target_select")],
-        [InlineKeyboardButton(text="تعمیر و سوخت‌گیری", callback_data="maintenance_menu")],
-    ])
-
-    await message.answer(report, reply_markup=keyboard)
-
-
-# --- مدیریت گروه ---
-async def check_bot_admin(chat_id: int) -> bool:
-    """بررسی می‌کند که آیا ربات در گروه ادمین است یا خیر."""
+async def user_is_admin_in_chat(chat_id: int, user_id: int) -> bool:
     try:
-        chat_admins = await bot.get_chat_administrators(chat_id)
-        bot_member = await bot.get_chat_member(chat_id, bot.id)
-        return bot_member.status == 'administrator' or bot.id in [admin.user.id for admin in chat_admins]
-    except Exception as e:
-        logger.warning(f"خطا در بررسی ادمین بودن ربات در گروه {chat_id}: {e}")
+        member = await bot.get_chat_member(chat_id, user_id)
+        return member.status in ("administrator", "creator")
+    except Exception:
         return False
 
-@dp.my_chat_member(ChatMemberUpdatedFilter(member_status_changed=(IS_NOT_MEMBER | MEMBER) >> ADMINISTRATOR))
-async def bot_promoted_to_admin(event: ChatMemberUpdated):
-    chat_id = event.chat.id
-    await db.execute(
-        "INSERT INTO groups (chat_id, name) VALUES ($1, $2) ON CONFLICT (chat_id) DO UPDATE SET is_active = TRUE, name = $2",
-        chat_id, event.chat.title
-    )
-    logger.info(f"ربات در گروه '{event.chat.title}' ({chat_id}) به ادمین ارتقا یافت. گروه فعال شد.")
-    try:
-        await bot.send_message(chat_id, "فرماندهی این گروه را به دست گرفتم. از این پس، اینجا تحت نظارت من است.")
-    except Exception as e:
-        logger.error(f"Failed to send promotion message to {chat_id}: {e}")
+async def get_user(pool: asyncpg.Pool, user_id: int) -> Optional[asyncpg.Record]:
+    async with pool.acquire() as conn:
+        return await conn.fetchrow("SELECT * FROM users WHERE user_id=$1;", user_id)
 
-@dp.my_chat_member(ChatMemberUpdatedFilter(member_status_changed=ADMINISTRATOR >> (IS_NOT_MEMBER | MEMBER)))
-async def bot_demoted_or_left(event: ChatMemberUpdated):
-    chat_id = event.chat.id
-    await db.execute("UPDATE groups SET is_active = FALSE WHERE chat_id = $1", chat_id)
-    logger.info(f"ربات از ادمینی در گروه '{event.chat.title}' ({chat_id}) برکنار یا خارج شد. گروه غیرفعال شد.")
+async def change_money(pool: asyncpg.Pool, user_id: int, delta: int):
+    async with pool.acquire() as conn:
+        await conn.execute("UPDATE users SET money = money + $1 WHERE user_id=$2;", delta, user_id)
 
+async def change_exp(pool: asyncpg.Pool, user_id: int, delta: int):
+    async with pool.acquire() as conn:
+        await conn.execute("UPDATE users SET exp = exp + $1 WHERE user_id=$2;", delta, user_id)
 
-# --- تسک پس‌زمینه برای چالش‌های گروهی ---
-async def run_group_missions():
-    await asyncio.sleep(10) # تاخیر اولیه برای اطمینان از اتصال کامل
-    logger.info("سرویس چالش‌های گروهی آغاز به کار کرد.")
+# --- حلقه‌های پس‌زمینه ---
+async def produce_oil_loop(pool: asyncpg.Pool):
     while True:
         try:
-            active_groups = await db.fetch("SELECT chat_id FROM groups WHERE is_active = TRUE")
-            for group in active_groups:
-                chat_id = group['chat_id']
-                
-                # بررسی ادمین بودن قبل از ارسال پیام
-                if not await check_bot_admin(chat_id):
-                    logger.warning(f"ربات در گروه {chat_id} ادمین نیست. چالش ارسال نشد.")
-                    await db.execute("UPDATE groups SET is_active = FALSE WHERE chat_id = $1", chat_id)
-                    continue
+            async with pool.acquire() as conn:
+                rows = await conn.fetch("SELECT user_id, oil, production, capacity FROM rigs;")
+                for r in rows:
+                    new_oil = min(r["oil"] + r["production"], r["capacity"])
+                    if new_oil != r["oil"]:
+                        await conn.execute("UPDATE rigs SET oil=$1 WHERE user_id=$2;", new_oil, r["user_id"])
+        except Exception:
+            pass
+        await asyncio.sleep(60)
 
-                mission = random.choice(MISSIONS)
-                # بررسی اینکه آیا این ماموریت قبلا در این گروه اجرا شده یا نه
-                existing = await db.fetchval("SELECT 1 FROM group_missions WHERE chat_id = $1 AND mission_id = $2", chat_id, mission['id'])
-                if existing:
-                    # اگر همه ماموریت‌ها انجام شده، ریست می‌کنیم
-                    count_missions = len(MISSIONS)
-                    count_done = await db.fetchval("SELECT COUNT(*) FROM group_missions WHERE chat_id = $1", chat_id)
-                    if count_done >= count_missions:
-                        await db.execute("DELETE FROM group_missions WHERE chat_id = $1", chat_id)
-                        logger.info(f"تمام ماموریت‌ها در گروه {chat_id} ریست شد.")
-                    else:
-                        continue # برو سراغ گروه بعدی
-
-                await db.execute(
-                    "INSERT INTO group_missions (chat_id, mission_id, status) VALUES ($1, $2, 'pending') ON CONFLICT (chat_id, mission_id) DO NOTHING",
-                    chat_id, mission['id']
-                )
-
-                keyboard = InlineKeyboardMarkup(inline_keyboard=[
-                    [InlineKeyboardButton(text="پاسخ بده", callback_data=f"quiz_answer_{mission['id']}")]
-                ])
-                # در این نسخه، به جای دکمه، مستقیما از کاربر می‌خواهیم جواب را ریپلای کند.
-                await bot.send_message(chat_id, f"<b>چالش جدید!</b>\n\n{mission['question']}\n\nاولین نفری که به این پیام ریپلای صحیح بدهد، {QUIZ_REWARD} سکه جایزه می‌گیرد.")
-
-        except Exception as e:
-            logger.error(f"خطا در اجرای تسک چالش گروهی: {e}")
-
-        # زمان انتظار تصادفی بین 20 تا 300 دقیقه
-        sleep_duration = random.randint(QUIZ_INTERVAL_MIN_MINUTES * 60, QUIZ_INTERVAL_MAX_MINUTES * 60)
-        logger.info(f"چالش بعدی تا {sleep_duration // 60} دقیقه دیگر اجرا خواهد شد.")
-        await asyncio.sleep(sleep_duration)
-
-
-@dp.message(F.reply_to_message)
-async def handle_quiz_reply(message: Message):
-    """
-    پردازش پاسخ به پیام چالش.
-    """
-    if not message.reply_to_message or not message.reply_to_message.from_user.is_bot:
-        return
-
-    # پیدا کردن ماموریت مربوط به این پیام
-    question_text = message.reply_to_message.text.split('\n\n')[1]
-    mission = next((m for m in MISSIONS if m["question"] == question_text), None)
-
-    if not mission:
-        return
-
-    chat_id = message.chat.id
-    mission_status = await db.fetchrow("SELECT * FROM group_missions WHERE chat_id = $1 AND mission_id = $2", chat_id, mission['id'])
-
-    if not mission_status or mission_status['status'] != 'pending':
-        await message.reply("دیر رسیدی، سرباز. این چالش قبلاً حل شده.")
-        return
-
-    if message.text.strip().lower() == mission['answer'].lower():
-        user_id = message.from_user.id
-        user = await db.get_user(user_id)
-        if not user:
-            await db.create_user(user_id)
-        
-        await db.execute("UPDATE users SET money = money + $1 WHERE user_id = $2", QUIZ_REWARD, user_id)
-        await db.execute(
-            "UPDATE group_missions SET status = 'answered', user_id = $1 WHERE chat_id = $2 AND mission_id = $3",
-            user_id, chat_id, mission['id']
-        )
-        
-        await message.reply(f"پاسخ صحیح بود. {message.from_user.first_name} مبلغ {QUIZ_REWARD} سکه دریافت کرد. آفرین سرباز.")
-        # ویرایش پیام اصلی برای جلوگیری از پاسخ‌های بیشتر
+async def reduce_rig_health_loop(pool: asyncpg.Pool):
+    while True:
         try:
-            await bot.edit_message_text(
-                chat_id=chat_id,
-                message_id=message.reply_to_message.message_id,
-                text=f"<b>چالش حل شد!</b>\n\n{mission['question']}\n\nپاسخ صحیح: {mission['answer']}\nبرنده: {message.from_user.first_name}"
-            )
-        except Exception as e:
-            logger.warning(f"Failed to edit quiz message in {chat_id}: {e}")
+            async with pool.acquire() as conn:
+                await conn.execute("""
+                UPDATE rigs SET health = health - 1
+                WHERE health > 0;
+                """)
+        except Exception:
+            pass
+        await asyncio.sleep(2 * 3600)
 
-# --- تابع اصلی برای اجرای ربات ---
-async def main() -> None:
-    # چک کردن توکن قبل از هر کاری
-    if not BOT_TOKEN:
-        logger.critical("توکن ربات تعریف نشده! عملیات لغو شد.")
+async def random_challenges_loop(pool: asyncpg.Pool):
+    while True:
+        delay = random.randint(20 * 60, 300 * 60)
+        await asyncio.sleep(delay)
+        try:
+            async with pool.acquire() as conn:
+                groups = await conn.fetch("SELECT chat_id FROM groups;")
+                for g in groups:
+                    mission_id = random.randint(1, 999999)
+                    await conn.execute("""
+                    INSERT INTO group_missions (chat_id, mission_id, status)
+                    VALUES ($1, $2, 'active')
+                    ON CONFLICT (chat_id, mission_id) DO NOTHING;
+                    """, g["chat_id"], mission_id)
+                    try:
+                        await bot.send_message(g["chat_id"], f"چالش جدید: ماموریت #{mission_id} فعال شد. فرمانده میگه آماده شین.")
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
+# --- دستورات و منطق بازی ---
+@dp.message(Command("start"))
+async def cmd_start(message: Message):
+    await add_user_if_missing(db_pool, message.from_user.id, "ایران")
+    await message.answer("خوش‌آمدی سرباز. فرمانده اینجاس؛ اطاعت کن یا از بین برو.")
+
+@dp.message(Command("register_group"))
+async def cmd_register_group(message: Message):
+    if message.chat.type in (ChatType.GROUP, ChatType.SUPERGROUP):
+        is_admin = await user_is_admin_in_chat(message.chat.id, message.from_user.id)
+        if not is_admin:
+            await message.answer("من ادمین نیستم، همین.")
+            return
+        async with db_pool.acquire() as conn:
+            await conn.execute("INSERT INTO groups (chat_id) VALUES ($1) ON CONFLICT (chat_id) DO NOTHING;", message.chat.id)
+        await message.answer("گروه ثبت شد. آماده باش برای دستور بعدی از طرف من.")
+    else:
+        await message.answer("این دستور فقط برای گروه‌هاست. خصوصی؟ بزن ادامه رو.")
+
+@dp.message(Command("shop"))
+async def cmd_shop(message: Message):
+    if message.chat.type in (ChatType.GROUP, ChatType.SUPERGROUP):
+        is_admin = await user_is_admin_in_chat(message.chat.id, message.from_user.id)
+        if not is_admin:
+            await message.answer("من ادمین نیستم، همین.")
+            return
+    text = (
+        "فروشگاه:\n"
+        "/buy_rig - خرید دکل (+سطح، سلامتی محدود)\n"
+        "/upgrade_rig - ارتقاء دکل (نیاز تجربه و پول)\n"
+        "/buy_fighter - خرید جنگنده\n"
+        "/buy_missile - خرید موشک برای پدافند یا جنگنده\n"
+        "/status - دیدن وضعیت کلی\n"
+    )
+    await message.answer(text)
+
+@dp.message(Command("buy_rig"))
+async def cmd_buy_rig(message: Message):
+    if message.chat.type in (ChatType.GROUP, ChatType.SUPERGROUP):
+        is_admin = await user_is_admin_in_chat(message.chat.id, message.from_user.id)
+        if not is_admin:
+            await message.answer("من ادمین نیستم، همین.")
+            return
+    user_id = message.from_user.id
+    async with db_pool.acquire() as conn:
+        row = await conn.fetchrow("SELECT money, exp FROM users WHERE user_id=$1;", user_id)
+        if not row:
+            await add_user_if_missing(db_pool, user_id)
+            row = await conn.fetchrow("SELECT money, exp FROM users WHERE user_id=$1;", user_id)
+        money = row["money"]
+        exp = row["exp"]
+        cost = 5000
+        exp_req = 100
+        if money < cost or exp < exp_req:
+            await message.answer("پول یا تجربه نداری. برو کار کن بعد بیا.")
+            return
+        async with conn.transaction():
+            await conn.execute("UPDATE users SET money = money - $1 WHERE user_id=$2;", cost, user_id)
+            await conn.execute("""
+            UPDATE rigs SET level = level + 1, health = 10, capacity = capacity + 500, production = production + 1
+            WHERE user_id=$1;
+            """, user_id)
+        await message.answer("دکل خریدی. این یکی قابل نابود شدنه، مراقب باش.")
+
+@dp.message(Command("upgrade_rig"))
+async def cmd_upgrade_rig(message: Message):
+    if message.chat.type in (ChatType.GROUP, ChatType.SUPERGROUP):
+        is_admin = await user_is_admin_in_chat(message.chat.id, message.from_user.id)
+        if not is_admin:
+            await message.answer("من ادمین نیستم، همین.")
+            return
+    user_id = message.from_user.id
+    async with db_pool.acquire() as conn:
+        rig = await conn.fetchrow("SELECT level FROM rigs WHERE user_id=$1;", user_id)
+        if not rig:
+            await add_user_if_missing(db_pool, user_id)
+            rig = await conn.fetchrow("SELECT level FROM rigs WHERE user_id=$1;", user_id)
+        next_level = rig["level"] + 1
+        cost = next_level * 4000
+        exp_req = next_level * 200
+        user = await conn.fetchrow("SELECT money, exp FROM users WHERE user_id=$1;", user_id)
+        if user["money"] < cost or user["exp"] < exp_req:
+            await message.answer("پول یا تجربه کافی نداری برای ارتقاء. تلاش کن.")
+            return
+        async with conn.transaction():
+            await conn.execute("UPDATE users SET money = money - $1, exp = exp - $2 WHERE user_id=$3;", cost, exp_req, user_id)
+            await conn.execute("UPDATE rigs SET level = level + 1, health = 15, capacity = capacity + 700, production = production + 2 WHERE user_id=$1;", user_id)
+        await message.answer("دکل ارتقاء یافت. قدرتمند شدی ولی مسئولیت هم داری.")
+
+@dp.message(Command("rig"))
+async def cmd_rig_status(message: Message):
+    user_id = message.from_user.id
+    async with db_pool.acquire() as conn:
+        rig = await conn.fetchrow("SELECT level, health, oil, capacity, production FROM rigs WHERE user_id=$1;", user_id)
+        if not rig:
+            await add_user_if_missing(db_pool, user_id)
+            rig = await conn.fetchrow("SELECT level, health, oil, capacity, production FROM rigs WHERE user_id=$1;", user_id)
+        health_text = "نامحدود" if rig["health"] == -1 else str(rig["health"])
+        await message.answer(f"دکل: سطح {rig['level']}\nسلامت: {health_text}\nنفت: {rig['oil']}/{rig['capacity']}\nتولید: {rig['production']}/دقیقه")
+
+@dp.message(Command("buy_fighter"))
+async def cmd_buy_fighter(message: Message):
+    if message.chat.type in (ChatType.GROUP, ChatType.SUPERGROUP):
+        is_admin = await user_is_admin_in_chat(message.chat.id, message.from_user.id)
+        if not is_admin:
+            await message.answer("من ادمین نیستم، همین.")
+            return
+    user_id = message.from_user.id
+    async with db_pool.acquire() as conn:
+        user = await conn.fetchrow("SELECT money, country FROM users WHERE user_id=$1;", user_id)
+        if not user:
+            await add_user_if_missing(db_pool, user_id)
+            user = await conn.fetchrow("SELECT money, country FROM users WHERE user_id=$1;", user_id)
+        cost = 2000
+        if user["money"] < cost:
+            await message.answer("پول نداری. زود باش کار کن.")
+            return
+        jets = JETS_BY_COUNTRY.get(user["country"], JETS_BY_COUNTRY["ایران"])
+        name = random.choice(jets)
+        health, attack_time, fuel_cons, missile_slots = JET_STATS["default"]
+        async with conn.transaction():
+            await conn.execute("UPDATE users SET money = money - $1 WHERE user_id=$2;", cost, user_id)
+            await conn.execute("""
+            INSERT INTO fighters (user_id, name, health, last_attack, fuel_percent, missiles)
+            VALUES ($1, $2, $3, $4, $5, $6);
+            """, user_id, name, health, datetime.datetime.utcnow(), 100, json.dumps([]))
+        await message.answer(f"جنگنده خریدی: {name}. سوخت 100%، موشک نداری فعلاً.")
+
+@dp.message(Command("buy_missile"))
+async def cmd_buy_missile(message: Message):
+    if message.chat.type in (ChatType.GROUP, ChatType.SUPERGROUP):
+        is_admin = await user_is_admin_in_chat(message.chat.id, message.from_user.id)
+        if not is_admin:
+            await message.answer("من ادمین نیستم، همین.")
+            return
+    user_id = message.from_user.id
+    async with db_pool.acquire() as conn:
+        user = await conn.fetchrow("SELECT money, country FROM users WHERE user_id=$1;", user_id)
+        if not user:
+            await add_user_if_missing(db_pool, user_id)
+            user = await conn.fetchrow("SELECT money, country FROM users WHERE user_id=$1;", user_id)
+        missiles = MISSILES_BY_COUNTRY.get(user["country"], MISSILES_BY_COUNTRY["ایران"])
+        name = random.choice(missiles)
+        damage, price = MISSILE_STATS["default"]
+        if user["money"] < price:
+            await message.answer("پول نداری. برگرد پول جمع کن.")
+            return
+        async with conn.transaction():
+            await conn.execute("UPDATE users SET money = money - $1 WHERE user_id=$2;", price, user_id)
+            row = await conn.fetchrow("SELECT missiles FROM defenses WHERE user_id=$1;", user_id)
+            if row:
+                current = row["missiles"]
+                new_list = current + [name]
+                await conn.execute("UPDATE defenses SET missiles = $1 WHERE user_id=$2;", json.dumps(new_list), user_id)
+            else:
+                await conn.execute("INSERT INTO defenses (user_id, reduction_percent, missiles) VALUES ($1, $2, $3);", user_id, DEFENSE_STATS["default"][0], json.dumps([name]))
+        await message.answer(f"موشک {name} خریداری شد. آماده دفاع یا ضدحمله.")
+
+@dp.message(Command("status"))
+async def cmd_status(message: Message):
+    user_id = message.from_user.id
+    async with db_pool.acquire() as conn:
+        user = await conn.fetchrow("SELECT money, exp, country FROM users WHERE user_id=$1;", user_id)
+        if not user:
+            await add_user_if_missing(db_pool, user_id)
+            user = await conn.fetchrow("SELECT money, exp, country FROM users WHERE user_id=$1;", user_id)
+        rig = await conn.fetchrow("SELECT level, health, oil, capacity, production FROM rigs WHERE user_id=$1;", user_id)
+        fighters = await conn.fetch("SELECT id, name, health, fuel_percent, missiles FROM fighters WHERE user_id=$1;", user_id)
+        defense = await conn.fetchrow("SELECT reduction_percent, missiles FROM defenses WHERE user_id=$1;", user_id)
+        health_text = "نامحدود" if rig["health"] == -1 else str(rig["health"])
+        text = f"پول: {user['money']}\nتجربه: {user['exp']}\nکشور: {user['country']}\n\nدکل: سطح {rig['level']}, سلامت: {health_text}, نفت: {rig['oil']}/{rig['capacity']}\n\nجنگنده‌ها:\n"
+        if fighters:
+            for f in fighters:
+                text += f"- #{f['id']} {f['name']} | سلامتی: {f['health']} | سوخت: {f['fuel_percent']}% | موشک‌ها: {len(f['missiles'])}\n"
+        else:
+            text += "هیچ جنگنده‌ای نداری.\n"
+        if defense:
+            text += f"\nپدافند: کاهش {defense['reduction_percent']}% | موشک‌ها: {len(defense['missiles'])}\n"
+        await message.answer(text)
+
+@dp.message(Command("launch_attack"))
+async def cmd_launch_attack(message: Message):
+    # دستور: /launch_attack <target_user_id> <fighter_id> [use_missile]
+    if message.chat.type in (ChatType.GROUP, ChatType.SUPERGROUP):
+        is_admin = await user_is_admin_in_chat(message.chat.id, message.from_user.id)
+        if not is_admin:
+            await message.answer("من ادمین نیستم، همین.")
+            return
+    parts = message.text.split()
+    if len(parts) < 3:
+        await message.answer("دستور اشتباهه. فرمت: /launch_attack <target_user_id> <fighter_id> [use_missile]")
         return
-    if not DATABASE_URL:
-        logger.critical("آدرس پایگاه داده تعریف نشده! عملیات لغو شد.")
+    try:
+        target_id = int(parts[1])
+        fighter_id = int(parts[2])
+        use_missile_flag = False
+        if len(parts) >= 4 and parts[3].lower() in ("1", "true", "yes", "y"):
+            use_missile_flag = True
+    except Exception:
+        await message.answer("پارامترها نامعتبر هستند.")
         return
+    attacker_id = message.from_user.id
+    async with db_pool.acquire() as conn:
+        attacker_fighter = await conn.fetchrow("SELECT id, name, health, last_attack, fuel_percent, missiles FROM fighters WHERE id=$1 AND user_id=$2;", fighter_id, attacker_id)
+        if not attacker_fighter:
+            await message.answer("جنگنده پیدا نشد یا برای تو نیست.")
+            return
+        now = datetime.datetime.utcnow()
+        last_attack = attacker_fighter["last_attack"] or (now - datetime.timedelta(seconds=99999))
+        attack_interval = JET_STATS["default"][1]
+        elapsed = (now - last_attack).total_seconds()
+        if elapsed < attack_interval:
+            await message.answer(f"آماده نیستی هنوز. باید {int(attack_interval - elapsed)} ثانیه صبر کنی.")
+            return
+        if attacker_fighter["fuel_percent"] < JET_STATS["default"][2]:
+            await message.answer("سوخت جنگنده کافی نیست.")
+            return
+        # محاسبه دمیج
+        base_damage = 30
+        missile_damage = 0
+        missiles_list = attacker_fighter["missiles"] or []
+        if use_missile_flag and missiles_list:
+            missile_name = missiles_list[0]
+            missile_damage = MISSILE_STATS["default"][0]
+            missiles_list = missiles_list[1:]
+            await conn.execute("UPDATE fighters SET missiles = $1 WHERE id=$2;", json.dumps(missiles_list), fighter_id)
+        total_damage = base_damage + missile_damage
+        # کاهش سوخت
+        new_fuel = max(0, attacker_fighter["fuel_percent"] - JET_STATS["default"][2])
+        await conn.execute("UPDATE fighters SET fuel_percent=$1, last_attack=$2 WHERE id=$3;", new_fuel, now, fighter_id)
+        # هدف: کاهش سلامتی دکل یا جنگنده هدف (اگر جنگنده داره)
+        target_fighter = await conn.fetchrow("SELECT id, user_id, name, health FROM fighters WHERE id=$1;", target_id)
+        if target_fighter:
+            # هدف یک جنگنده است
+            defender = await conn.fetchrow("SELECT reduction_percent, missiles FROM defenses WHERE user_id=$1;", target_fighter["user_id"])
+            reduction = defender["reduction_percent"] if defender else 0
+            damage_after = int(total_damage * (100 - reduction) / 100)
+            # اعمال دمیج
+            new_health = target_fighter["health"] - damage_after
+            await conn.execute("UPDATE fighters SET health=$1 WHERE id=$2;", new_health, target_id)
+            # پدافند ممکن است ضدحمله کند
+            if defender and defender["missiles"]:
+                def_missiles = list(defender["missiles"])
+                counter_missile = def_missiles.pop(0)
+                counter_damage = DEFENSE_STATS["default"][1]
+                await conn.execute("UPDATE defenses SET missiles=$1 WHERE user_id=$2;", json.dumps(def_missiles), target_fighter["user_id"])
+                # اعمال دمیج به جنگنده مهاجم (به سادگی اولین جنگنده مهاجم)
+                await conn.execute("UPDATE fighters SET health = health - $1 WHERE id=$2;", counter_damage, fighter_id)
+                await message.answer(f"حمله اجرا شد. هدف: جنگنده #{target_id}. کاهش پدافند {reduction}%. پدافند دشمن با موشک {counter_missile} ضدحمله کرد.")
+            else:
+                await message.answer(f"حمله اجرا شد. هدف: جنگنده #{target_id}. دمیج وارد شد: {damage_after}.")
+            return
+        # اگر هدف جنگنده نبود، فرض را بر دکل می‌گذاریم
+        rig = await conn.fetchrow("SELECT user_id, level, health FROM rigs WHERE user_id=$1;", target_id)
+        if rig:
+            defender = await conn.fetchrow("SELECT reduction_percent, missiles FROM defenses WHERE user_id=$1;", target_id)
+            reduction = defender["reduction_percent"] if defender else 0
+            damage_after = int(total_damage * (100 - reduction) / 100)
+            # اگر health == -1 (غیرقابل نابودی)، فقط کاهش نفت یا اثر نمایشی
+            if rig["health"] == -1:
+                # کاهش نفت به عنوان پیام: مقدار کوچکی کم می‌شود
+                await conn.execute("UPDATE rigs SET oil = GREATEST(oil - $1, 0) WHERE user_id=$2;", damage_after, target_id)
+                await message.answer(f"حمله به دکل بی‌اثر بود؛ دکل اولیه غیرقابل نابودیست اما نفتش {damage_after} واحد کاهش یافت.")
+            else:
+                new_health = rig["health"] - damage_after
+                await conn.execute("UPDATE rigs SET health=$1 WHERE user_id=$2;", new_health, target_id)
+                if defender and defender["missiles"]:
+                    def_missiles = list(defender["missiles"])
+                    counter_missile = def_missiles.pop(0)
+                    counter_damage = DEFENSE_STATS["default"][1]
+                    await conn.execute("UPDATE defenses SET missiles=$1 WHERE user_id=$2;", json.dumps(def_missiles), target_id)
+                    await conn.execute("UPDATE fighters SET health = health - $1 WHERE id=$2;", counter_damage, fighter_id)
+                    await message.answer(f"دکل ضربه خورد. پدافند هدف با موشک {counter_missile} ضدحمله کرد.")
+                else:
+                    await message.answer(f"دکل ضربه خورد. {damage_after} واحد آسیب وارد شد.")
+            return
+        await message.answer("هدف پیدا نشد. گیر دادم به هوا؟")
 
-    # اتصال و راه‌اندازی پایگاه داده
-    await db.connect()
-    await db.setup_schema()
+# هندلر عمومی برای جلوگیری از باز شدن پنل یا عملکرد مدیریتی در گروه توسط کاربران عادی
+@dp.message()
+async def catch_all(message: Message):
+    if message.chat.type in (ChatType.GROUP, ChatType.SUPERGROUP):
+        is_admin = await user_is_admin_in_chat(message.chat.id, message.from_user.id)
+        if not is_admin:
+            await message.answer("من ادمین نیستم، همین.")
+            return
+    return
 
-    # ایجاد تسک پس‌زمینه
-    asyncio.create_task(run_group_missions())
-
-    # شروع به گوش دادن به دستورات
+# --- شروع برنامه ---
+async def main():
+    global db_pool
+    db_pool = await create_db_pool()
+    await setup_tables(db_pool)
+    # حلقه‌های پس‌زمینه
+    asyncio.create_task(produce_oil_loop(db_pool))
+    asyncio.create_task(reduce_rig_health_loop(db_pool))
+    asyncio.create_task(random_challenges_loop(db_pool))
     await dp.start_polling(bot)
 
-
 if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except (KeyboardInterrupt, SystemExit):
-        logger.info("دریافت سیگنال خاموشی... در حال پایان دادن به عملیات.")
-    finally:
-        # اطمینان از بسته شدن اتصال دیتابیس در هنگام خروج
-        loop = asyncio.get_event_loop()
-        loop.run_until_complete(db.close())
-        logger.info("عملیات به پایان رسید.")
-
-
+    asyncio.run(main())
