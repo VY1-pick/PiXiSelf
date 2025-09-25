@@ -145,29 +145,14 @@ async def get_common_groups(user_id: int) -> List[Tuple[int, str]]:
             continue
     return valid_groups
 
-async def check_bot_admin(chat_id: int, cb_or_msg: Optional[types.CallbackQuery | types.Message] = None) -> bool:
-    try:
-        me = await bot.get_me()
-        member = await bot.get_chat_member(chat_id, me.id)
-    except Exception:
-        if cb_or_msg:
-            try:
-                if isinstance(cb_or_msg, types.CallbackQuery):
-                    await cb_or_msg.answer("⚠️ خطا در بررسی دسترسی ربات.", show_alert=True)
-                else:
-                    await cb_or_msg.answer("⚠️ خطا در بررسی دسترسی ربات.")
-            except:
-                pass
-        return False
-    if member.status not in ("administrator", "creator"):
-        if cb_or_msg:
-            try:
-                if isinstance(cb_or_msg, types.CallbackQuery):
-                    await cb_or_msg.answer("⚠️ فرمانده در جایگاه خودش نیست! لطفاً ربات را ادمین کنید.", show_alert=True)
-                else:
-                    await cb_or_msg.answer("⚠️ فرمانده در جایگاه خودش نیست! لطفاً ربات را ادمین کنید.")
-            except:
-                pass
+
+async def check_bot_admin(chat_id: int, msg: types.Message = None) -> bool:
+    """بررسی می‌کند آیا ربات در گروه ادمین است یا نه"""
+    bot_member = await bot.get_chat_member(chat_id, bot.id)
+    if bot_member.status != "administrator":
+        if msg:
+            await msg.reply("⚠️ فرمانده هنوز به جایگاه حقیقی خودش (ادمین) نرسیده! "
+                            "لطفاً من رو ادمین کنید تا بتونم فرمان بدم.")
         return False
     return True
 
@@ -478,30 +463,42 @@ async def run_group_missions(chat_id: int):
 
 
 # هندلر برای تغییر وضعیت ربات در گروه
-@dp.my_chat_member(ChatMemberUpdatedFilter())
+from aiogram import types
+from aiogram.types import ChatMemberUpdated
+from aiogram.filters import ChatMemberUpdatedFilter
+
+# فقط وقتی وضعیت عضویت تغییر کرد
+@dp.my_chat_member(ChatMemberUpdatedFilter(member_status_changed=True))
 async def on_bot_status_change(event: ChatMemberUpdated):
     chat = event.chat
-    old_status = event.old_chat_member.status
     new_status = event.new_chat_member.status
+    old_status = event.old_chat_member.status
 
-    # ✅ وقتی ربات به گروه اضافه یا ادمین میشه
+    # ✅ اضافه شدن یا ادمین شدن
     if new_status in ("member", "administrator"):
         await db.execute(
-            "INSERT INTO groups(chat_id, title, username) VALUES($1, $2, $3) "
-            "ON CONFLICT (chat_id) DO UPDATE SET title=$2, username=$3",
-            (chat.id, chat.title, chat.username or "")
+            """
+            INSERT INTO groups (chat_id, title, username)
+            VALUES ($1, $2, $3)
+            ON CONFLICT (chat_id) DO UPDATE 
+            SET title = $2, username = $3
+            """,
+            (chat.id, chat.title or "", chat.username or "")
         )
         await bot.send_message(
             chat.id,
             "🫡 فرمانده وارد شد!\n\n"
-            "لطفاً من رو به مقام ادمین ارتقا بدین تا بتونم فرماندهی واقعی داشته باشم ⚔️"
+            "سربازان! من فرمانده‌ی شما هستم. برای فرماندهی درست "
+            "لطفاً من رو به مقام ادمین ارتقا بدید ⚔️"
         )
+        print(f"[INFO] ربات به گروه اضافه شد: {chat.title} ({chat.id})")
 
-    # ❌ وقتی ربات از گروه حذف یا کیک میشه
+    # ❌ حذف یا کیک شدن
     elif new_status in ("left", "kicked"):
         await db.execute("DELETE FROM groups WHERE chat_id=$1", (chat.id,))
-        # این خط اختیاریه، فقط جهت اطلاع ادمین
-        print(f"ربات از گروه {chat.title} ({chat.id}) حذف شد و از دیتابیس پاک شد.")
+        print(f"[INFO] ربات از گروه {chat.title} ({chat.id}) حذف شد و از دیتابیس پاک شد.")
+
+        
         
 # ------------------ Bootstrap ------------------
 async def main():
@@ -526,5 +523,6 @@ if __name__ == "__main__":
         asyncio.run(main())
     except (KeyboardInterrupt, SystemExit):
         print("Bot stopped!")
+
 
 
