@@ -235,18 +235,15 @@ async def get_common_groups(user_id: int) -> List[Tuple[int, str]]:
     return valid_groups
 
 # هنگامی که وضعیت my_chat_member (ربات) عوض شود، جدول groups را آپدیت کن
+# ------------------ My Chat Member ------------------
 @dp.my_chat_member()
 async def on_my_chat_member(update: ChatMemberUpdated):
-    # update.chat — اطلاعات چت
-    # update.new_chat_member.status — وضعیت جدید ربات در چت
     chat = update.chat
     old_status = getattr(update.old_chat_member, "status", None)
     new_status = getattr(update.new_chat_member, "status", None)
     chat_id = chat.id
 
-    # وقتی ربات تازه اضافه شده به گروه (از left -> member/administrator/creator)
     if new_status in ("member", "administrator", "creator") and old_status in ("left", "kicked", None):
-        # ثبت گروه در دیتابیس (در صورت وجود آپدیت می‌کنیم)
         try:
             await db.execute(
                 "INSERT INTO groups(chat_id, title, username) VALUES($1,$2,$3) "
@@ -256,7 +253,6 @@ async def on_my_chat_member(update: ChatMemberUpdated):
         except Exception:
             pass
 
-        # پیامی در گروه ارسال کن که ربات اضافه شد و ادمین شود (فقط یکبار)
         try:
             await bot.send_message(
                 chat_id,
@@ -265,7 +261,14 @@ async def on_my_chat_member(update: ChatMemberUpdated):
         except Exception:
             pass
 
-    # اگر ربات از گروه خارج شد یا اخراج شد، می‌توان رکورد را حذف یا علامت‌گذاری کرد
+        # ایجاد تسک‌ها برای گروه تازه اضافه‌شده
+        if chat_id not in group_challenge_tasks:
+            c_task = asyncio.create_task(run_group_challenges(chat_id))
+            group_challenge_tasks[chat_id] = c_task
+        if chat_id not in group_mission_tasks:
+            m_task = asyncio.create_task(run_group_missions(chat_id))
+            group_mission_tasks[chat_id] = m_task
+
     if new_status in ("left", "kicked"):
         try:
             await db.execute("DELETE FROM groups WHERE chat_id=$1", (chat_id,))
@@ -405,23 +408,27 @@ group_mission_tasks: Dict[int, asyncio.Task] = {}
 
 active_challenges: Dict[int, Dict] = {}  # chat_id -> challenge info
 
+# ------------------ Challenges ------------------
 async def run_group_challenges(chat_id: int):
     while True:
-        delay = random.randint(5*60, 30*60)
+        delay = random.randint(5 * 60, 60 * 60)  # بین 5 تا 60 دقیقه
         await asyncio.sleep(delay)
 
-        # بررسی ادمین بودن قبل از ارسال پیام
         if not await check_bot_admin(chat_id, None):
-            continue  # اگر ربات ادمین نیست، چالش اجرا نشود
+            continue
 
         challenge = await db.fetchone("SELECT * FROM challenges ORDER BY RANDOM() LIMIT 1")
         if not challenge:
             continue
 
         try:
+            kb = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="⏱ زمان باقی‌مانده", callback_data=f"time_{chat_id}")]
+            ])
             msg = await bot.send_message(
                 chat_id,
-                f"فرمانده:\n سربازان! آماده باشید ⚔️\n\nچالش: {challenge['text']}\n⏱ زمان: 90 ثانیه"
+                f"فرمانده:\n سربازان! آماده باشید ⚔️\n\nچالش: {challenge['text']}",
+                reply_markup=kb
             )
         except Exception:
             continue
@@ -446,8 +453,6 @@ async def run_group_challenges(chat_id: int):
         except Exception:
             pass
 
-        # Timer — توجه: برای جلوگیری از rate-limit بهتره هر 2-3 ثانیه آپدیت کنید،
-        # ولی برای تجربه دقیق شما این کد هر ثانیه آپدیت می‌کند (در صورت نیاز می‌توان کاهش داد)
         for remaining in range(90, 0, -1):
             try:
                 await msg.edit_text(
@@ -457,7 +462,6 @@ async def run_group_challenges(chat_id: int):
                 break
             await asyncio.sleep(1)
 
-        # پایان چالش
         info = active_challenges.pop(chat_id, None)
         if info and not info["answered_by"]:
             try:
@@ -544,22 +548,57 @@ async def check_mission_completion(chat_id: int):
                 )
             except Exception:
                 pass
+                
+@dp.callback_query(lambda cb: cb.data.startswith("time_"))
+async def show_remaining_time(cb: types.CallbackQuery):
+    chat_id = int(cb.data.split("_")[1])
+    info = active_challenges.get(chat_id)
+    if not info:
+        await cb.answer("⏱ هیچ چالشی فعال نیست!", show_alert=True)
+        return
 
+    remaining = int((info["end_time"] - datetime.utcnow()).total_seconds())
+    if remaining < 0:
+        await cb.answer("⏱ زمان به پایان رسیده!", show_alert=True)
+    else:
+        await cb.answer(f"⏱ زمان باقی‌مانده: {remaining} ثانیه", show_alert=True)
+
+
+# ------------------ Missions ------------------
+async def wait_until_next(hour: int, minute: int = 0):
+    now = datetime.utcnow()
+    target = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    if target <= now:
+        target += timedelta(days=1)
+    await asyncio.sleep((target - now).total_seconds())
 
 async def run_group_missions(chat_id: int):
     while True:
-        row = await db.fetchone("SELECT last_update FROM group_missions_schedule WHERE chat_id=$1", (chat_id,))
+        # صبر تا نزدیک‌ترین ساعت 00:00 یا 12:00
         now = datetime.utcnow()
-        if row is None or (now - row["last_update"]).total_seconds() >= 8*3600:
-            # refresh missions
-            missions = await db.fetchall("SELECT * FROM missions ORDER BY RANDOM() LIMIT 3")
-            await db.execute("DELETE FROM group_missions WHERE chat_id=$1", (chat_id,))
-            for m in missions:
-                await db.execute("INSERT INTO group_missions(chat_id, mission_id, user_id, status) VALUES($1,$2,0,'pending')", (chat_id, m['id']))
-            await db.execute("INSERT INTO group_missions_schedule(chat_id, last_update) VALUES($1,$2) "
-                             "ON CONFLICT (chat_id) DO UPDATE SET last_update=$2", (chat_id, now))
-        await check_mission_completion(chat_id)
-        await asyncio.sleep(300)  # check every 5 minutes
+        if now.hour < 12:
+            await wait_until_next(12, 0)
+        else:
+            await wait_until_next(0, 0)
+
+        # ریفرش ماموریت‌ها
+        missions = await db.fetchall("SELECT * FROM missions ORDER BY RANDOM() LIMIT 3")
+        await db.execute("DELETE FROM group_missions WHERE chat_id=$1", (chat_id,))
+        for m in missions:
+            await db.execute(
+                "INSERT INTO group_missions(chat_id, mission_id, user_id, status) VALUES($1,$2,0,'pending')",
+                (chat_id, m['id'])
+            )
+        await db.execute(
+            "INSERT INTO group_missions_schedule(chat_id, last_update) VALUES($1,$2) "
+            "ON CONFLICT (chat_id) DO UPDATE SET last_update=$2",
+            (chat_id, datetime.utcnow())
+        )
+
+        # بعد از ایجاد ماموریت‌ها چند بار چک کن برای کامل‌شدن
+        for _ in range(12 * 60 // 5):  # هر 5 دقیقه یک بار، برای 12 ساعت
+            await check_mission_completion(chat_id)
+            await asyncio.sleep(300)
 
 # ------------------ Bootstrap ------------------
 async def main():
@@ -588,3 +627,4 @@ if __name__ == "__main__":
         asyncio.run(main())
     except (KeyboardInterrupt, SystemExit):
         print("Bot stopped!")
+
