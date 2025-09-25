@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 from typing import Optional, Dict, List, Tuple
 
 from aiogram import Bot, Dispatcher, types
-from aiogram.filters import Command
+from aiogram.filters import Command, ChatMemberUpdatedFilter
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, ChatMemberUpdated
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
@@ -476,6 +476,28 @@ async def run_group_missions(chat_id: int):
             await check_mission_completion(chat_id)
             await asyncio.sleep(300)
 
+
+# وقتی ربات به گروه اضافه یا حذف میشه
+@dp.my_chat_member(ChatMemberUpdatedFilter(member_status_changed=True))
+async def on_bot_added_or_removed(event: ChatMemberUpdated):
+    chat = event.chat
+    new_status = event.new_chat_member.status
+
+    if new_status in ("member", "administrator"):  # ربات وارد گروه شده
+        await db.execute(
+            "INSERT INTO groups(chat_id, title, username) VALUES($1, $2, $3) "
+            "ON CONFLICT (chat_id) DO UPDATE SET title=$2, username=$3",
+            (chat.id, chat.title, chat.username or "")
+        )
+        await bot.send_message(
+            chat.id,
+            "🫡 فرمانده وارد شد!\n\n"
+            "لطفاً من رو به مقام ادمین ارتقا بدین تا بتونم فرماندهی واقعی داشته باشم ⚔️"
+        )
+
+    elif new_status in ("left", "kicked"):  # ربات حذف شد
+        await db.execute("DELETE FROM groups WHERE chat_id=$1", (chat.id,))
+        
 # ------------------ Bootstrap ------------------
 async def main():
     await init_db()
