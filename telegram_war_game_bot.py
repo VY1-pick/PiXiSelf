@@ -5,8 +5,8 @@ import asyncio
 import logging
 import random
 from datetime import datetime, timezone
-
 import asyncpg
+from aiogram.client.default import DefaultBotProperties
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.enums import ParseMode
 from aiogram.filters import Command, CommandStart
@@ -290,7 +290,7 @@ class Form(StatesGroup):
     choosing_country = State()
 
 # --- نمونه‌سازی‌ها ---
-bot = Bot(token=BOT_TOKEN, default=types.DefaultBotProperties(parse_mode=ParseMode.HTML))
+bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML)
 dp = Dispatcher()
 db = DBAdapter(DATABASE_URL)
 
@@ -538,3 +538,4 @@ if __name__ == "__main__":
         loop = asyncio.get_event_loop()
         loop.run_until_complete(db.close())
         logger.info("عملیات به پایان رسید.")
+
