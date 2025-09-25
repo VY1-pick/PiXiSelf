@@ -290,7 +290,7 @@ class Form(StatesGroup):
     choosing_country = State()
 
 # --- نمونه‌سازی‌ها ---
-bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML)
+bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=HTML)
 dp = Dispatcher()
 db = DBAdapter(DATABASE_URL)
 
@@ -538,4 +538,5 @@ if __name__ == "__main__":
         loop = asyncio.get_event_loop()
         loop.run_until_complete(db.close())
         logger.info("عملیات به پایان رسید.")
+
 
