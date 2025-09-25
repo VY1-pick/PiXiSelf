@@ -611,57 +611,37 @@ async def run_group_missions(chat_id: int):
             await asyncio.sleep(300)
 
 # ------------------ My Chat Member handler (bot join/leave) ------------------
+@dp.my_chat_member()
+async def debug_bot_status(event: ChatMemberUpdated):
+    print(">>> my_chat_member event received")
+    print("chat_id:", event.chat.id, "status:", event.new_chat_member.status, "old:", event.old_chat_member.status)
+    
 @dp.my_chat_member(ChatMemberUpdatedFilter(member_status_changed=True))
 async def on_bot_status_change(event: ChatMemberUpdated):
     chat = event.chat
-    old_status = getattr(event.old_chat_member, "status", None)
-    new_status = getattr(event.new_chat_member, "status", None)
-    chat_id = chat.id
+    old = event.old_chat_member.status
+    new = event.new_chat_member.status
 
-    # اضافه شدن
-    if new_status in ("member", "administrator", "creator") and old_status in ("left", "kicked", None):
-        try:
-            await db.execute(
-                "INSERT INTO groups(chat_id, title, username) VALUES($1,$2,$3) "
-                "ON CONFLICT(chat_id) DO UPDATE SET title=$2, username=$3",
-                (chat_id, chat.title or "", chat.username or "")
-            )
-        except Exception:
-            pass
-        # پیام درخواست ادمینی
-        try:
-            await bot.send_message(
-                chat_id,
-                "🫡 فرمانده وارد شد!\n\nسربازان! لطفاً من را ادمین کنید تا بتوانم فرمان بدهم ⚠️"
-            )
-        except Exception:
-            pass
-        # ایجاد تسک‌ها برای این گروه
-        if chat_id not in group_challenge_tasks:
-            group_challenge_tasks[chat_id] = asyncio.create_task(run_group_challenges(chat_id))
-        if chat_id not in group_mission_tasks:
-            group_mission_tasks[chat_id] = asyncio.create_task(run_group_missions(chat_id))
+    if new in ("member", "administrator"):
+        await db.execute(
+            """
+            INSERT INTO groups (chat_id, title, username)
+            VALUES ($1, $2, $3)
+            ON CONFLICT (chat_id) DO UPDATE 
+            SET title=$2, username=$3
+            """,
+            (chat.id, chat.title or "", chat.username or "")
+        )
+        await bot.send_message(
+            chat.id,
+            "🫡 فرمانده وارد شد!\n\n"
+            "سربازان! لطفاً منو به مقام ادمین ارتقا بدید "
+            "تا بتونم در جایگاه اصلی خودم فرمان بدم ⚔️"
+        )
 
-    # حذف شدن
-    if new_status in ("left", "kicked"):
-        try:
-            await db.execute("DELETE FROM groups WHERE chat_id=$1", (chat_id,))
-        except Exception:
-            pass
-        # لغو تسک‌ها (در صورت وجود)
-        if chat_id in group_challenge_tasks:
-            try:
-                group_challenge_tasks[chat_id].cancel()
-            except:
-                pass
-            group_challenge_tasks.pop(chat_id, None)
-        if chat_id in group_mission_tasks:
-            try:
-                group_mission_tasks[chat_id].cancel()
-            except:
-                pass
-            group_mission_tasks.pop(chat_id, None)
-        print(f"[INFO] گروه {chat.title} ({chat_id}) از دیتابیس حذف شد.")
+    elif new in ("left", "kicked"):
+        await db.execute("DELETE FROM groups WHERE chat_id=$1", (chat.id,))
+        print(f"[INFO] گروه {chat.title} ({chat.id}) از دیتابیس حذف شد.")
 
 # ------------------ Bootstrap ------------------
 async def main():
@@ -685,5 +665,6 @@ if __name__ == "__main__":
         asyncio.run(main())
     except (KeyboardInterrupt, SystemExit):
         print("Bot stopped!")
+
 
 
