@@ -4,7 +4,6 @@ import asyncio
 import random
 from datetime import datetime, timedelta
 from typing import Optional, Dict, List, Tuple, Union
-
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command, ChatMemberUpdatedFilter
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, ChatMemberUpdated, Update
@@ -612,41 +611,33 @@ async def run_group_missions(chat_id: int):
 
 # ------------------ My Chat Member handler (bot join/leave) ------------------
 @dp.my_chat_member()
-async def debug_bot_status(event: ChatMemberUpdated):
-    print(">>> my_chat_member event received")
-    print("chat_id:", event.chat.id, "status:", event.new_chat_member.status, "old:", event.old_chat_member.status)
-    
-@dp.my_chat_member(ChatMemberUpdatedFilter(member_status_changed=True))
-async def on_bot_status_change(event: ChatMemberUpdated):
-    chat = event.chat
-    old = event.old_chat_member.status
-    new = event.new_chat_member.status
+async def bot_membership_changed(event: ChatMemberUpdated):
+    chat_id = event.chat.id
+    new_status = event.new_chat_member.status
+    old_status = event.old_chat_member.status
 
-    if new in ("member", "administrator"):
+    print(f">>> my_chat_member event received: chat_id={chat_id}, old={old_status}, new={new_status}")
+
+    # وقتی تازه به گروه اضافه شد (اما هنوز ادمین نیست)
+    if new_status == "member":
         await db.execute(
-            """
-            INSERT INTO groups (chat_id, title, username)
-            VALUES ($1, $2, $3)
-            ON CONFLICT (chat_id) DO UPDATE 
-            SET title=$2, username=$3
-            """,
-            (chat.id, chat.title or "", chat.username or "")
+            "INSERT INTO groups(chat_id, active) VALUES($1, $2) ON CONFLICT (chat_id) DO UPDATE SET active=$2",
+            (chat_id, True)
         )
-        await bot.send_message(
-            chat.id,
-            "🫡 فرمانده وارد شد!\n\n"
-            "سربازان! لطفاً منو به مقام ادمین ارتقا بدید "
-            "تا بتونم در جایگاه اصلی خودم فرمان بدم ⚔️"
-        )
+        await bot.send_message(chat_id, "من به گروه اضافه شدم ✅\nبرای اینکه بتونم فرماندهی کنم، منو ادمین کنین ⚔️")
 
-    elif new in ("left", "kicked"):
-        await db.execute("DELETE FROM groups WHERE chat_id=$1", (chat.id,))
-        print(f"[INFO] گروه {chat.title} ({chat.id}) از دیتابیس حذف شد.")
-        
-@dp.update()
-async def debug_all_updates(update: Update):
-    print(">>> UPDATE RECEIVED <<<")
-    print(update.json(indent=2))
+    # وقتی ادمین شد
+    elif new_status == "administrator":
+        await db.execute(
+            "INSERT INTO groups(chat_id, active) VALUES($1, $2) ON CONFLICT (chat_id) DO UPDATE SET active=$2",
+            (chat_id, True)
+        )
+        await bot.send_message(chat_id, "سپاس فرمانده! 🙌\nحالا می‌تونم دستور بدم ⚔️")
+
+    # وقتی حذف شد
+    elif new_status == "left":
+        await db.execute("DELETE FROM groups WHERE chat_id=$1", (chat_id,))
+        print(f"Group {chat_id} deleted from database.")
     
 # ------------------ Bootstrap ------------------
 async def main():
@@ -670,6 +661,7 @@ if __name__ == "__main__":
         asyncio.run(main())
     except (KeyboardInterrupt, SystemExit):
         print("Bot stopped!")
+
 
 
 
