@@ -259,7 +259,7 @@ async def cmd_start(message: types.Message, state: FSMContext):
     kb = InlineKeyboardMarkup(inline_keyboard=[[
         InlineKeyboardButton(
             text="➕ افزودن به گروه",
-            url=f"https://t.me/{me.username}?startgroup=true"
+            url=f"https://t.me/{me.username}"
         )
     ]])
 
@@ -685,4 +685,5 @@ if __name__ == "__main__":
         asyncio.run(main())
     except (KeyboardInterrupt, SystemExit):
         print("Bot stopped!")
+
 
