@@ -477,13 +477,15 @@ async def run_group_missions(chat_id: int):
             await asyncio.sleep(300)
 
 
-# وقتی ربات به گروه اضافه یا حذف میشه
-@dp.my_chat_member(ChatMemberUpdatedFilter(member_status_changed=True))
-async def on_bot_added_or_removed(event: ChatMemberUpdated):
+# هندلر برای تغییر وضعیت ربات در گروه
+@dp.my_chat_member(ChatMemberUpdatedFilter())
+async def on_bot_status_change(event: ChatMemberUpdated):
     chat = event.chat
+    old_status = event.old_chat_member.status
     new_status = event.new_chat_member.status
 
-    if new_status in ("member", "administrator"):  # ربات وارد گروه شده
+    # ✅ وقتی ربات به گروه اضافه یا ادمین میشه
+    if new_status in ("member", "administrator"):
         await db.execute(
             "INSERT INTO groups(chat_id, title, username) VALUES($1, $2, $3) "
             "ON CONFLICT (chat_id) DO UPDATE SET title=$2, username=$3",
@@ -495,8 +497,11 @@ async def on_bot_added_or_removed(event: ChatMemberUpdated):
             "لطفاً من رو به مقام ادمین ارتقا بدین تا بتونم فرماندهی واقعی داشته باشم ⚔️"
         )
 
-    elif new_status in ("left", "kicked"):  # ربات حذف شد
+    # ❌ وقتی ربات از گروه حذف یا کیک میشه
+    elif new_status in ("left", "kicked"):
         await db.execute("DELETE FROM groups WHERE chat_id=$1", (chat.id,))
+        # این خط اختیاریه، فقط جهت اطلاع ادمین
+        print(f"ربات از گروه {chat.title} ({chat.id}) حذف شد و از دیتابیس پاک شد.")
         
 # ------------------ Bootstrap ------------------
 async def main():
@@ -521,4 +526,5 @@ if __name__ == "__main__":
         asyncio.run(main())
     except (KeyboardInterrupt, SystemExit):
         print("Bot stopped!")
+
 
