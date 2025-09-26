@@ -15,7 +15,7 @@ from aiogram import Bot, Dispatcher, F
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode, ChatType
 from aiogram.filters import Command
-from aiogram.filters.chat_type import ChatType as ChatTypeFilter # نام مستعار برای خوانایی
+from aiogram.filters import ChatType as ChatTypeFilter # نام مستعار برای خوانایی
 from aiogram.filters.callback_data import CallbackData
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, BotCommand
 from aiogram.utils.keyboard import InlineKeyboardBuilder
@@ -323,3 +323,4 @@ if __name__ == "__main__":
         asyncio.run(main())
     except (KeyboardInterrupt, SystemExit):
         print("--- ربات خاموش شد ---")
+
