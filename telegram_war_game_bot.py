@@ -44,11 +44,11 @@ dp = Dispatcher()
 async def cmd_start(message: Message):
     fullname = message.from_user.full_name
     text = (
-        f"سرباز {hbold(fullname)},\n"
+        f"سرباز {hbold(fullname)}\n"
         f"به میدان جنگ خوش آمدی... البته خوش‌آمد که چه عرض کنم، "
         f"فعلاً خیلی دست‌وپا چلفتی هستی!\n\n"
         f"برای شروع، این اسباب‌بازی را به گروه اضافه کن تا ببینیم چقدر توان داری."
-        f"\n\nاز دستور {hbold('/panel')} در چت خصوصی استفاده کن تا به پنل فرماندهی دسترسی داشته باشی."
+        f"\n\nاز دستور {hbold('/panel')} استفاده کن تا به پنل فرماندهی دسترسی داشته باشی."
     )
 
     add_group_button = InlineKeyboardMarkup(
@@ -69,3 +69,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
