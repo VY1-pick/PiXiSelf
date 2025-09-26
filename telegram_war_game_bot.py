@@ -39,7 +39,7 @@ bot = Bot(
 )
 dp = Dispatcher()
 
-# ================== هندلر استارت ==================
+# ================== هندلر ها ==================
 @dp.message(Command("start"))
 async def cmd_start(message: Message):
     # اگر محیط گروه است
@@ -80,6 +80,39 @@ async def cmd_start(message: Message):
 
     await message.answer(text, reply_markup=add_group_button)
 
+@dp.message(Command("panel"))
+async def cmd_panel(message: Message):
+    # تشخیص محیط
+    if message.chat.type in ("group", "supergroup"):
+        # اگر توی گروه زد، هدایتش به pv
+        panel_button = InlineKeyboardMarkup(
+            inline_keyboard=[[
+                InlineKeyboardButton(
+                    text="📋 ورود به پنل فرماندهی",
+                    url=f"https://t.me/{BOT_USERNAME}?start=panel"
+                )
+            ]]
+        )
+        await message.reply(
+            "سرباز! پنل فرماندهی فقط در چت خصوصی باز می‌شود.\n"
+            "روی دکمه زیر بزن و بیا تا درجه‌ات را بررسی کنم.",
+            reply_markup=panel_button
+        )
+    else:
+        # محیط خصوصی: نمایش پیغام پنل
+        panel_button = InlineKeyboardMarkup(
+            inline_keyboard=[[
+                InlineKeyboardButton(
+                    text="📋 شروع پنل فرماندهی",
+                    url="#"  # بعداً آدرس واقعی یا بخش داخلی رو میزاری
+                )
+            ]]
+        )
+        await message.answer(
+            "به پنل فرماندهی خوش آمدی...\n"
+            "اینجا جاییست که تصمیمات بزرگ گرفته می‌شود.",
+            reply_markup=panel_button
+        )
 
 # ================== اجرای بات ==================
 async def main():
@@ -88,5 +121,6 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
 
 
