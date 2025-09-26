@@ -104,7 +104,7 @@ async def cmd_panel(message: Message):
             inline_keyboard=[[
                 InlineKeyboardButton(
                     text="📋 شروع پنل فرماندهی",
-                    url="#"  # بعداً آدرس واقعی یا بخش داخلی رو میزاری
+                    url=f"https://t.me/{BOT_USERNAME}?start=panel"  # بعداً آدرس واقعی یا بخش داخلی رو میزاری
                 )
             ]]
         )
@@ -121,6 +121,7 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
 
 
 
