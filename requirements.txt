@@ -1,4 +1,2 @@
-aiogram>=3.7.0
-asyncpg
-python-dotenv
-
+aiogram
+psycopg2
