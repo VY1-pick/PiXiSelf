@@ -82,7 +82,7 @@ async def start_cmd(message: Message):
             f"فعلاً خیلی دست‌وپا چلفتی هستی!\n\n"
             f"برای شروع، این اسباب‌بازی را به گروه اضافه کن تا ببینیم چقدر توان داری."
             f"\n\nاز دستور {hbold('/panel')} استفاده کن تا به پنل فرماندهی دسترسی داشته باشی."
-        (
+        )
         await message.answer(
             text,
             reply_markup=add_button
@@ -153,4 +153,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
