@@ -6,20 +6,20 @@
 
 import os
 import logging
-import psycopg2
-from aiogram import Bot, Dispatcher
+import asyncpg
+from aiohttp import web
+from aiogram import Bot, Dispatcher, Router, types
 from aiogram.client.default import DefaultBotProperties
-from aiogram.utils.markdown import hbold
 from aiogram.enums import ParseMode
 from aiogram.filters import Command
 from aiogram.types import (
-    Message, 
-    InlineKeyboardMarkup, 
-    InlineKeyboardButton, 
-    ChatMemberUpdated, 
+    Message,
+    InlineKeyboardMarkup,
+    InlineKeyboardButton,
+    ChatMemberUpdated,
     Update
 )
-from aiohttp import web
+from aiogram.utils.markdown import hbold
 
 # -----------------------------
 # تنظیمات پایه
@@ -47,20 +47,30 @@ bot = Bot(
 
 dp = Dispatcher()
 
-# -----------------------------
-# اتصال به دیتابیس Postgres
-# -----------------------------
-try:
-    conn = psycopg2.connect(DATABASE_URL)
-    cursor = conn.cursor()
-    logging.info("✅ اتصال به دیتابیس برقرار شد.")
-except Exception as e:
-    logging.error(f"❌ خطا در اتصال به دیتابیس: {e}")
+# ... همان تنظیمات و import ها ...
 
 # -----------------------------
-# هندلر /start
+# اتصال به دیتابیس Asyncpg
 # -----------------------------
-@dp.message(Command("start"))
+async def get_db():
+    return await asyncpg.connect(DATABASE_URL)
+
+# -----------------------------
+# ساخت دیتابیس در اولین اجرا
+# -----------------------------
+async def init_db():
+    conn = await asyncpg.connect(DATABASE_URL)
+    await conn.execute(CREATE_GROUPS_TABLE)
+    await conn.execute(CREATE_USER_PROFILES_TABLE)
+    await conn.close()
+    logging.info("✅ دیتابیس و جدول‌ها ساخته شدند یا وجود داشتند.")
+
+# -----------------------------
+# Router اصلی
+# -----------------------------
+router = Router()
+
+@router.message(Command("start"))
 async def start_cmd(message: Message):
     if message.chat.type in ["group", "supergroup"]:
         chat_member = await bot.get_chat_member(message.chat.id, bot.id)
@@ -89,10 +99,28 @@ async def start_cmd(message: Message):
             reply_markup=add_button
         )
 
-# -----------------------------
-# زمانی که نقش بات تغییر می‌کند
-# -----------------------------
-@dp.my_chat_member()
+@router.message(Command("panel"))
+async def cmd_panel(message: Message):
+    conn = await get_db()
+    rows = await conn.fetch("""
+        SELECT g.title, up.money, up.oil, up.level
+        FROM user_profiles up
+        JOIN groups g ON g.group_key = up.group_key
+        WHERE up.user_id = $1
+    """, message.from_user.id)
+    await conn.close()
+
+    if not rows:
+        await message.answer("📭 شما در هیچ گروهی عضو نیستید.")
+        return
+
+    text = "\n".join([
+        f"{hbold(row['title'])} | 💰 {row['money']} | 🛢 {row['oil']} | 📈 Level {row['level']}"
+        for row in rows
+    ])
+    await message.answer(text)
+
+@router.my_chat_member()
 async def on_bot_role_change(event: ChatMemberUpdated):
     new_status = event.new_chat_member.status
     if new_status == "administrator":
@@ -107,19 +135,10 @@ async def on_bot_role_change(event: ChatMemberUpdated):
         )
 
 # -----------------------------
-# هندلر /panel در PV
-# -----------------------------
-@dp.message(Command("panel"))
-async def panel_cmd(message: Message):
-    if message.chat.type == "private":
-        await message.answer("🎯 این پنل هنوز آماده نیست، اما به زودی می‌تونی اوضاع کشورت رو دید بزنی!")
-    else:
-        await message.reply("سرباز! پنل رو فقط در پیام خصوصی می‌تونی ببینی.")
-
-# -----------------------------
-# راه‌اندازی Webhook
+# راه‌اندازی Webhook + DB
 # -----------------------------
 async def on_startup(app: web.Application):
+    await init_db()  # ✅ ساخت جدول‌ها
     await bot.delete_webhook(drop_pending_updates=True)
     await bot.set_webhook(WEBHOOK_URL)
     logging.info(f"✅ Webhook فعال شد: {WEBHOOK_URL}")
@@ -135,7 +154,7 @@ async def on_shutdown(app: web.Application):
 async def handle_webhook(request: web.Request):
     try:
         data = await request.json()
-        update = Update.model_validate(data)  # ✅ تبدیل به آبجکت Update
+        update = Update.model_validate(data)
         await dp.feed_webhook_update(bot, update)
     except Exception as e:
         logging.error(f"❌ خطا در پردازش وبهوک: {e}")
@@ -145,6 +164,8 @@ async def handle_webhook(request: web.Request):
 # اجرای برنامه WebApp
 # -----------------------------
 def main():
+    dp.include_router(router)
+
     app = web.Application()
     app.router.add_post(WEBHOOK_PATH, handle_webhook)
     app.on_startup.append(on_startup)
@@ -154,6 +175,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
-
