@@ -11,7 +11,7 @@ from aiogram import Bot, Dispatcher, F
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.filters import Command
-from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, ChatMemberUpdated
+from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, ChatMemberUpdated, Update
 from aiohttp import web
 
 # -----------------------------
@@ -117,7 +117,8 @@ async def on_shutdown(app: web.Application):
 # -----------------------------
 async def handle_webhook(request: web.Request):
     try:
-        update = await request.json()
+        data = await request.json()
+        update = Update.model_validate(data)
         await dp.feed_webhook_update(bot, update)
     except Exception as e:
         logging.error(f"❌ خطا در پردازش وبهوک: {e}")
@@ -136,6 +137,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
