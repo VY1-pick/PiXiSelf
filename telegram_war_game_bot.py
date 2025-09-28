@@ -7,11 +7,11 @@
 import os
 import logging
 import psycopg2
-from aiogram import Bot, Dispatcher
+from aiogram import Bot, Dispatcher, F
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.filters import Command
-from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, ChatMemberUpdated
 from aiohttp import web
 
 # -----------------------------
@@ -72,6 +72,24 @@ async def start_cmd(message: Message):
         )
 
 # -----------------------------
+# زمانی که نقش بات تغییر می‌کند
+# -----------------------------
+@dp.my_chat_member()
+async def on_bot_role_change(event: ChatMemberUpdated):
+    # اگر بات ادمین شد
+    new_status = event.new_chat_member.status
+    if new_status == "administrator":
+        await bot.send_message(
+            event.chat.id,
+            "🪖 سرباز آماده دریافت دستورات باش!"
+        )
+    elif new_status == "member":  # یعنی از ادمین به عضو معمولی شد
+        await bot.send_message(
+            event.chat.id,
+            "⚠ سرباز! فرماندهی ازت گرفته شد، دیگه نمی‌تونم دستور صادر کنم."
+        )
+        
+# -----------------------------
 # هندلر /panel در PV
 # -----------------------------
 @dp.message(Command("panel"))
@@ -118,6 +136,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
