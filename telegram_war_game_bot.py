@@ -16,7 +16,7 @@ from functools import wraps
 from aiogram import Bot, Dispatcher, types
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
-from aiogram.filters import Command, Text
+from aiogram.filters import Command
 from aiogram.types import (
     Message, InlineKeyboardMarkup, InlineKeyboardButton,
     ChatMemberUpdated, Update
@@ -192,7 +192,7 @@ async def start_cmd(message: Message, **kwargs):
         )
         await message.answer(text, reply_markup=add_button)
 
-@dp.message(Text(text="شروع جنگ", ignore_case=True))
+@dp.message(lambda m: m.text and m.text.lower() == "شروع جنگ")
 @log_exceptions
 async def start_war(message: Message, **kwargs):
     if message.chat.type not in ["group", "supergroup"]:
