@@ -103,7 +103,7 @@ def game_main_menu():
 # حذف پیام بعد از 20 ثانیه فقط در گروه‌ها
 # -----------------------------
 async def delete_after_delay(chat_type: str, chat_id: int, message_id: int, delay: int = 20):
-    if chat_type in ["group", "supergroup"]:  # فقط گروه‌ها
+    if chat_type in ["group", "supergroup"]:
         await asyncio.sleep(delay)
         try:
             await bot.delete_message(chat_id, message_id)
@@ -116,15 +116,13 @@ async def send_and_auto_delete(chat_type: str, chat_id: int, text: str, **kwargs
         asyncio.create_task(delete_after_delay(chat_type, chat_id, msg.message_id))
     return msg
 
-
 # -----------------------------
 # هندلر /start
 # -----------------------------
 @router.message(Command("start"))
 async def start_cmd(message: Message):
-    asyncio.create_task(delete_after_delay(message.chat.type, message.chat.id, message.message_id))
-
     if message.chat.type in ["group", "supergroup"]:
+        asyncio.create_task(delete_after_delay(message.chat.type, message.chat.id, message.message_id))
         chat_member = await bot.get_chat_member(message.chat.id, bot.id)
         if chat_member.status != "administrator":
             msg = await message.reply("سرباز! من رو ادمین کن تا بتونم فرماندهی کنم!")
@@ -150,7 +148,6 @@ async def start_cmd(message: Message):
         )
         await message.answer(text, reply_markup=add_button)
 
-
 # -----------------------------
 # وقتی نقش بات تغییر می‌کند
 # -----------------------------
@@ -159,7 +156,6 @@ async def on_bot_role_change(event: ChatMemberUpdated):
     new_status = event.new_chat_member.status
     if event.chat.type in ["group", "supergroup"]:
         if new_status == "administrator":
-            # ثبت گروه در دیتابیس
             conn = await get_db()
             await conn.execute("""
                 INSERT INTO groups (group_key, chat_id, title)
@@ -167,34 +163,29 @@ async def on_bot_role_change(event: ChatMemberUpdated):
                 ON CONFLICT (chat_id) DO NOTHING;
             """, event.chat.id, event.chat.title)
             await conn.close()
-
-            # منو و خوش‌آمد
-            msg1 = await bot.send_message(
+            msg = await bot.send_message(
                 event.chat.id,
                 "🪖 فرمانده در جایگاه حقیقی خود قرار گرفت، سربازان آماده دریافت دستورات باشین!"
             )
-            asyncio.create_task(delete_after_delay(message.chat.type, message.chat.id, msg.message_id))
-
+            asyncio.create_task(delete_after_delay(event.chat.type, event.chat.id, msg.message_id))
         elif new_status == "member":
             msg = await bot.send_message(
                 event.chat.id,
                 "⚠ سربازان! وقتی در خواب بودم جایگاه من رو دزدیدن، من در این جایگاه نمیتوانم دستوری صادر کنم."
             )
-            asyncio.create_task(delete_after_delay(message.chat.type, message.chat.id, msg.message_id))
-
+            asyncio.create_task(delete_after_delay(event.chat.type, event.chat.id, msg.message_id))
 
 # -----------------------------
 # هندلر /panel
 # -----------------------------
 @router.message(Command("panel"))
 async def cmd_panel(message: Message):
-    asyncio.create_task(delete_after_delay(message.chat.type, message.chat.id, msg.message_id))
-    
-    if message.chat.type == "private":
+    if message.chat.type in ["group", "supergroup"]:
+        asyncio.create_task(delete_after_delay(message.chat.type, message.chat.id, message.message_id))
+    elif message.chat.type == "private":
         text = "🎯 پنل میدیریت کشور فقط در چت خصوصی در دسترس هست!"
-        msg = await message.answer(text)
-        asyncio.create_task(delete_after_delay(message.chat.type, message.chat.id, msg.message_id))
-
+        await message.answer(text)
+        return
 
     conn = await get_db()
     rows = await conn.fetch("""
@@ -207,7 +198,8 @@ async def cmd_panel(message: Message):
 
     if not rows:
         msg = await message.answer("📭 شما در هیچ گروهی عضو نیستید.")
-        asyncio.create_task(delete_after_delay(message.chat.type, message.chat.id, msg.message_id))
+        if message.chat.type in ["group", "supergroup"]:
+            asyncio.create_task(delete_after_delay(message.chat.type, message.chat.id, msg.message_id))
         return
 
     text = "\n".join([
@@ -215,16 +207,17 @@ async def cmd_panel(message: Message):
         for row in rows
     ])
     msg = await message.answer(text)
-    asyncio.create_task(delete_after_delay(message.chat.type, message.chat.id, msg.message_id))
+    if message.chat.type in ["group", "supergroup"]:
+        asyncio.create_task(delete_after_delay(message.chat.type, message.chat.id, msg.message_id))
 
 # -----------------------------
 # نمایش موجودی بعد از ارسال سرمایه در گروه
 # -----------------------------
 @router.message(lambda m: m.text and "سرمایه" in m.text)
 async def check_investment_pattern(message: Message):
-    asyncio.create_task(delete_after_delay(message.chat.type, message.chat.id, msg.message_id))
+    if message.chat.type in ["group", "supergroup"]:
+        asyncio.create_task(delete_after_delay(message.chat.type, message.chat.id, message.message_id))
 
-    # دیتابیس
     conn = await get_db()
     row = await conn.fetchrow("""
         SELECT money, oil, level
@@ -240,14 +233,15 @@ async def check_investment_pattern(message: Message):
         text = "📭 شما هیچ موجودی در این گروه ندارید."
 
     msg = await message.answer(text)
-    asyncio.create_task(delete_after_delay(message.chat.type, message.chat.id, msg.message_id))
-
+    if message.chat.type in ["group", "supergroup"]:
+        asyncio.create_task(delete_after_delay(message.chat.type, message.chat.id, msg.message_id))
 
 # -----------------------------
 # هندلر منوی شیشه‌ای (callback)
 # -----------------------------
 @router.callback_query()
 async def process_menu_selection(callback: types.CallbackQuery):
+    chat_type = callback.message.chat.type
     if callback.data == "view_resources":
         conn = await get_db()
         row = await conn.fetchrow("""
@@ -262,26 +256,33 @@ async def process_menu_selection(callback: types.CallbackQuery):
             msg = await callback.message.answer(
                 f"💰 پول: {row['money']} | 🛢 نفت: {row['oil']} | 📈 Level {row['level']}"
             )
-            asyncio.create_task(delete_after_delay(message.chat.type, message.chat.id, msg.message_id))
+            if chat_type in ["group", "supergroup"]:
+                asyncio.create_task(delete_after_delay(chat_type, callback.message.chat.id, msg.message_id))
         else:
             msg = await callback.message.answer("📭 موجودی یافت نشد.")
-            asyncio.create_task(delete_after_delay(message.chat.type, message.chat.id, msg.message_id))
+            if chat_type in ["group", "supergroup"]:
+                asyncio.create_task(delete_after_delay(chat_type, callback.message.chat.id, msg.message_id))
 
     elif callback.data == "attack_enemy":
         msg = await callback.message.answer("⚔ عملیات حمله شروع شد!")
-        asyncio.create_task(delete_after_delay(message.chat.type, message.chat.id, msg.message_id))
+        if chat_type in ["group", "supergroup"]:
+            asyncio.create_task(delete_after_delay(chat_type, callback.message.chat.id, msg.message_id))
     elif callback.data == "upgrade_building":
         msg = await callback.message.answer("🏗 ساختمان در حال ارتقاء است...")
-        asyncio.create_task(delete_after_delay(message.chat.type, message.chat.id, msg.message_id))
+        if chat_type in ["group", "supergroup"]:
+            asyncio.create_task(delete_after_delay(chat_type, callback.message.chat.id, msg.message_id))
     elif callback.data == "defense_up":
         msg = await callback.message.answer("🛡 دفاع نیروها تقویت شد!")
-        asyncio.create_task(delete_after_delay(message.chat.type, message.chat.id, msg.message_id))
+        if chat_type in ["group", "supergroup"]:
+            asyncio.create_task(delete_after_delay(chat_type, callback.message.chat.id, msg.message_id))
     elif callback.data == "level_up":
         msg = await callback.message.answer("📈 سطح شما افزایش یافت!")
-        asyncio.create_task(delete_after_delay(message.chat.type, message.chat.id, msg.message_id))
+        if chat_type in ["group", "supergroup"]:
+            asyncio.create_task(delete_after_delay(chat_type, callback.message.chat.id, msg.message_id))
     elif callback.data == "buy_resources":
         msg = await callback.message.answer("🪙 خرید منابع انجام شد!")
-        asyncio.create_task(delete_after_delay(message.chat.type, message.chat.id, msg.message_id))
+        if chat_type in ["group", "supergroup"]:
+            asyncio.create_task(delete_after_delay(chat_type, callback.message.chat.id, msg.message_id))
 
     await callback.answer()
 
@@ -313,8 +314,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
-
-
-
