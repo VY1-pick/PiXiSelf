@@ -153,27 +153,41 @@ async def start_cmd(message: Message):
 # -----------------------------
 @router.my_chat_member()
 async def on_bot_role_change(event: ChatMemberUpdated):
-    new_status = event.new_chat_member.status
-    if event.chat.type in ["group", "supergroup"]:
-        if new_status == "administrator":
-            conn = await get_db()
-            await conn.execute("""
-                INSERT INTO groups (group_key, chat_id, title)
-                VALUES (gen_random_uuid()::text, $1, $2)
-                ON CONFLICT (chat_id) DO NOTHING;
-            """, event.chat.id, event.chat.title)
-            await conn.close()
-            msg = await bot.send_message(
-                event.chat.id,
-                "🪖 فرمانده در جایگاه حقیقی خود قرار گرفت، سربازان آماده دریافت دستورات باشین!"
-            )
-            asyncio.create_task(delete_after_delay(event.chat.type, event.chat.id, msg.message_id))
-        elif new_status == "member":
-            msg = await bot.send_message(
-                event.chat.id,
-                "⚠ سربازان! وقتی در خواب بودم جایگاه من رو دزدیدن، من در این جایگاه نمیتوانم دستوری صادر کنم."
-            )
-            asyncio.create_task(delete_after_delay(event.chat.type, event.chat.id, msg.message_id))
+    # این بخش پیام قبلی "ادمین شدم" را حذف کردیم و ثبت گروه را به دستور "شروع جنگ" منتقل کردیم
+    pass
+
+# -----------------------------
+# هندلر شروع جنگ
+# -----------------------------
+@router.message(Command("startwar"))
+async def start_war(message: Message):
+    if message.chat.type not in ["group", "supergroup"]:
+        # اخطار در خصوصی
+        await message.answer("⚠ این دستور فقط باید در یک گروه اجرا شود.")
+        return
+
+    # حذف پیام دستور بعد 20 ثانیه
+    asyncio.create_task(delete_after_delay(message.chat.type, message.chat.id, message.message_id))
+
+    # بررسی ادمین بودن
+    chat_member = await bot.get_chat_member(message.chat.id, bot.id)
+    if chat_member.status != "administrator":
+        msg = await message.answer("سرباز! من رو ادمین کن تا بتونم فرماندهی کنم!")
+        asyncio.create_task(delete_after_delay(message.chat.type, message.chat.id, msg.message_id))
+        return
+
+    # ثبت گروه در دیتابیس
+    conn = await get_db()
+    await conn.execute("""
+        INSERT INTO groups (group_key, chat_id, title)
+        VALUES (gen_random_uuid()::text, $1, $2)
+        ON CONFLICT (chat_id) DO NOTHING;
+    """, message.chat.id, message.chat.title)
+    await conn.close()
+
+    # پیام آماده باش
+    msg = await message.answer("🪖 آماده دریافت دستورات باشین!")
+    asyncio.create_task(delete_after_delay(message.chat.type, message.chat.id, msg.message_id))
 
 # -----------------------------
 # هندلر /panel
@@ -184,9 +198,8 @@ async def cmd_panel(message: Message):
         asyncio.create_task(delete_after_delay(message.chat.type, message.chat.id, message.message_id))
         msg = await message.answer("⚠ این دستور فقط در چت خصوصی قابل استفاده است. لطفاً به من پیام بده!")
         asyncio.create_task(delete_after_delay(message.chat.type, message.chat.id, msg.message_id))
-        await message.answer(msg)
         return
-        
+
     elif message.chat.type == "private":
         conn = await get_db()
         rows = await conn.fetch("""
@@ -198,18 +211,14 @@ async def cmd_panel(message: Message):
         await conn.close()
 
         if not rows:
-            msg = await message.answer("📭 شما در هیچ گروهی عضو نیستید.")
-            if message.chat.type in ["group", "supergroup"]:
-                asyncio.create_task(delete_after_delay(message.chat.type, message.chat.id, msg.message_id))
+            await message.answer("📭 شما در هیچ گروهی عضو نیستید.")
             return
 
         text = "\n".join([
             f"{hbold(row['title'])} | 💰 {row['money']} | 🛢 {row['oil']} | 📈 Level {row['level']}"
             for row in rows
         ])
-        msg = await message.answer(text)
-        if message.chat.type in ["group", "supergroup"]:
-            asyncio.create_task(delete_after_delay(message.chat.type, message.chat.id, msg.message_id))
+        await message.answer(text)
 
 # -----------------------------
 # نمایش موجودی بعد از ارسال سرمایه در گروه
@@ -315,4 +324,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
