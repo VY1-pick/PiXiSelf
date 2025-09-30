@@ -182,33 +182,34 @@ async def on_bot_role_change(event: ChatMemberUpdated):
 async def cmd_panel(message: Message):
     if message.chat.type in ["group", "supergroup"]:
         asyncio.create_task(delete_after_delay(message.chat.type, message.chat.id, message.message_id))
-    elif message.chat.type == "private":
-        text = "🎯 پنل میدیریت کشور فقط در چت خصوصی در دسترس هست!"
-        await message.answer(text)
+        msg = await message.answer("⚠ این دستور فقط در چت خصوصی قابل استفاده است. لطفاً به من پیام بده!")
+        asyncio.create_task(delete_after_delay(message.chat.type, message.chat.id, msg.message_id))
+        await message.answer(msg)
         return
+        
+    elif message.chat.type == "private":
+        conn = await get_db()
+        rows = await conn.fetch("""
+            SELECT g.title, up.money, up.oil, up.level
+            FROM user_profiles up
+            JOIN groups g ON g.group_key = up.group_key
+            WHERE up.user_id = $1
+        """, message.from_user.id)
+        await conn.close()
 
-    conn = await get_db()
-    rows = await conn.fetch("""
-        SELECT g.title, up.money, up.oil, up.level
-        FROM user_profiles up
-        JOIN groups g ON g.group_key = up.group_key
-        WHERE up.user_id = $1
-    """, message.from_user.id)
-    await conn.close()
+        if not rows:
+            msg = await message.answer("📭 شما در هیچ گروهی عضو نیستید.")
+            if message.chat.type in ["group", "supergroup"]:
+                asyncio.create_task(delete_after_delay(message.chat.type, message.chat.id, msg.message_id))
+            return
 
-    if not rows:
-        msg = await message.answer("📭 شما در هیچ گروهی عضو نیستید.")
+        text = "\n".join([
+            f"{hbold(row['title'])} | 💰 {row['money']} | 🛢 {row['oil']} | 📈 Level {row['level']}"
+            for row in rows
+        ])
+        msg = await message.answer(text)
         if message.chat.type in ["group", "supergroup"]:
             asyncio.create_task(delete_after_delay(message.chat.type, message.chat.id, msg.message_id))
-        return
-
-    text = "\n".join([
-        f"{hbold(row['title'])} | 💰 {row['money']} | 🛢 {row['oil']} | 📈 Level {row['level']}"
-        for row in rows
-    ])
-    msg = await message.answer(text)
-    if message.chat.type in ["group", "supergroup"]:
-        asyncio.create_task(delete_after_delay(message.chat.type, message.chat.id, msg.message_id))
 
 # -----------------------------
 # نمایش موجودی بعد از ارسال سرمایه در گروه
@@ -314,3 +315,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
