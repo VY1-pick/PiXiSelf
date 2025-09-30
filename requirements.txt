@@ -1,4 +1,4 @@
-aiogram
+aiogram==3.3.1
 asyncpg
 python-dotenv
-
+aiohttp
