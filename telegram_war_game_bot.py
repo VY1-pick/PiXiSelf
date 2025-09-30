@@ -13,7 +13,7 @@ from aiohttp import web
 from aiogram import Bot, Dispatcher, Router, types
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
-from aiogram.filters import Command, Regexp
+from aiogram.filters import Command, Text
 from aiogram.types import (
     Message,
     InlineKeyboardMarkup,
@@ -210,12 +210,11 @@ async def cmd_panel(message: Message):
 # -----------------------------
 # نمایش موجودی بعد از ارسال سرمایه در گروه
 # -----------------------------
-@router.message(Regexp(r"سرمایه"))
+@router.message(Text(regexp=r"سرمایه"))
 async def check_investment_pattern(message: Message):
-    # حذف پیام کاربر بعد از 15 ثانیه
     asyncio.create_task(delete_after_delay(message.chat.id, message.message_id))
 
-    # خواندن موجودی از دیتابیس
+    # دیتابیس
     conn = await get_db()
     row = await conn.fetchrow("""
         SELECT money, oil, level
@@ -230,7 +229,6 @@ async def check_investment_pattern(message: Message):
     else:
         text = "📭 شما هیچ موجودی در این گروه ندارید."
 
-    # ارسال جواب و حذف بعد از 15 ثانیه
     msg = await message.answer(text)
     asyncio.create_task(delete_after_delay(message.chat.id, msg.message_id))
 
@@ -304,3 +302,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
