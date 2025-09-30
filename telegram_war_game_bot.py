@@ -1,7 +1,6 @@
 # -----------------------------------------------------------------------------
 # |                      World War Telegram Mini-Game Bot                     |
-# |                  Refactored & Optimized for aiogram v3.7.x                |
-# |                                By Amiro                                   |
+# |                   Optimized for aiogram v3.x without Router               |
 # -----------------------------------------------------------------------------
 
 import os
@@ -10,7 +9,7 @@ import asyncpg
 import asyncio
 from aiohttp import web
 
-from aiogram import Bot, Dispatcher, Router, types
+from aiogram import Bot, Dispatcher, types
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.filters import Command
@@ -42,7 +41,6 @@ bot = Bot(
     default=DefaultBotProperties(parse_mode=ParseMode.HTML)
 )
 dp = Dispatcher()
-router = Router()
 
 # -----------------------------
 # کوئری‌های ایجاد جدول‌ها
@@ -81,7 +79,18 @@ async def init_db():
     await conn.close()
 
 # -----------------------------
-# ساخت منوی شیشه‌ای
+# حذف پیام بعد از 20 ثانیه فقط در گروه‌ها
+# -----------------------------
+async def delete_after_delay(chat_type: str, chat_id: int, message_id: int, delay: int = 20):
+    if chat_type in ["group", "supergroup"]:
+        await asyncio.sleep(delay)
+        try:
+            await bot.delete_message(chat_id, message_id)
+        except Exception:
+            pass
+
+# -----------------------------
+# منوی شیشه‌ای
 # -----------------------------
 def game_main_menu():
     return InlineKeyboardMarkup(inline_keyboard=[
@@ -100,26 +109,9 @@ def game_main_menu():
     ])
 
 # -----------------------------
-# حذف پیام بعد از 20 ثانیه فقط در گروه‌ها
-# -----------------------------
-async def delete_after_delay(chat_type: str, chat_id: int, message_id: int, delay: int = 20):
-    if chat_type in ["group", "supergroup"]:
-        await asyncio.sleep(delay)
-        try:
-            await bot.delete_message(chat_id, message_id)
-        except Exception:
-            pass
-
-async def send_and_auto_delete(chat_type: str, chat_id: int, text: str, **kwargs):
-    msg = await bot.send_message(chat_id, text, **kwargs)
-    if chat_type in ["group", "supergroup"]:
-        asyncio.create_task(delete_after_delay(chat_type, chat_id, msg.message_id))
-    return msg
-
-# -----------------------------
 # هندلر /start
 # -----------------------------
-@router.message(Command("start"))
+@dp.message(Command("start"))
 async def start_cmd(message: Message):
     if message.chat.type in ["group", "supergroup"]:
         asyncio.create_task(delete_after_delay(message.chat.type, message.chat.id, message.message_id))
@@ -129,7 +121,7 @@ async def start_cmd(message: Message):
             asyncio.create_task(delete_after_delay(message.chat.type, message.chat.id, msg.message_id))
             return
         msg = await message.reply(
-            f"🪖 سرباز {message.from_user.full_name}،آماده باش برای ورود فرماندهی!"
+            f"🪖 سرباز {message.from_user.full_name}، آماده باش برای ورود فرماندهی!"
         )
         asyncio.create_task(delete_after_delay(message.chat.type, message.chat.id, msg.message_id))
     else:
@@ -141,42 +133,37 @@ async def start_cmd(message: Message):
         fullname = message.from_user.full_name
         text = (
             f"سرباز {hbold(fullname)}\n"
-            f"به میدان جنگ خوش آمدی... البته خوش آمد که چه عرض کنم، "
-            f"فعلاً خیلی دست‌وپا چلفتی هستی!\n\n"
-            f"برای شروع، این اسباب‌بازی را به گروه اضافه کن تا ببینیم چقدر توان داری."
-            f"\n\nاز دستور {hbold('/panel')} استفاده کن تا به پنل فرماندهی دسترسی داشته باشی."
+            f"به میدان جنگ خوش آمدی.\n\n"
+            f"برای شروع، این ربات را به گروه اضافه کن.\n"
+            f"از دستور {hbold('/panel')} استفاده کن تا به پنل فرماندهی دسترسی داشته باشی."
         )
         await message.answer(text, reply_markup=add_button)
 
 # -----------------------------
-# وقتی نقش بات تغییر می‌کند
+# هندلر تغییر نقش بات
 # -----------------------------
-@router.my_chat_member()
+@dp.my_chat_member()
 async def on_bot_role_change(event: ChatMemberUpdated):
-    # این بخش پیام قبلی "ادمین شدم" را حذف کردیم و ثبت گروه را به دستور "شروع جنگ" منتقل کردیم
+    # حذف پیام ادمین شدم
     pass
 
 # -----------------------------
-# هندلر شروع جنگ
+# هندلر شروع جنگ (متن فارسی)
 # -----------------------------
-@router.message(Command("startwar"))
+@dp.message(lambda m: m.text and m.text.strip() == "شروع جنگ")
 async def start_war(message: Message):
     if message.chat.type not in ["group", "supergroup"]:
-        # اخطار در خصوصی
-        await message.answer("⚠ این دستور فقط باید در یک گروه اجرا شود.")
+        await message.answer("⚠ این دستور باید در گروه اجرا شود، نه در چت خصوصی!")
         return
 
-    # حذف پیام دستور بعد 20 ثانیه
     asyncio.create_task(delete_after_delay(message.chat.type, message.chat.id, message.message_id))
 
-    # بررسی ادمین بودن
     chat_member = await bot.get_chat_member(message.chat.id, bot.id)
     if chat_member.status != "administrator":
         msg = await message.answer("سرباز! من رو ادمین کن تا بتونم فرماندهی کنم!")
         asyncio.create_task(delete_after_delay(message.chat.type, message.chat.id, msg.message_id))
         return
 
-    # ثبت گروه در دیتابیس
     conn = await get_db()
     await conn.execute("""
         INSERT INTO groups (group_key, chat_id, title)
@@ -185,14 +172,13 @@ async def start_war(message: Message):
     """, message.chat.id, message.chat.title)
     await conn.close()
 
-    # پیام آماده باش
     msg = await message.answer("🪖 آماده دریافت دستورات باشین!")
     asyncio.create_task(delete_after_delay(message.chat.type, message.chat.id, msg.message_id))
 
 # -----------------------------
 # هندلر /panel
 # -----------------------------
-@router.message(Command("panel"))
+@dp.message(Command("panel"))
 async def cmd_panel(message: Message):
     if message.chat.type in ["group", "supergroup"]:
         asyncio.create_task(delete_after_delay(message.chat.type, message.chat.id, message.message_id))
@@ -221,9 +207,9 @@ async def cmd_panel(message: Message):
         await message.answer(text)
 
 # -----------------------------
-# نمایش موجودی بعد از ارسال سرمایه در گروه
+# هندلر نمایش موجودی در گروه
 # -----------------------------
-@router.message(lambda m: m.text and "سرمایه" in m.text)
+@dp.message(lambda m: m.text and "سرمایه" in m.text)
 async def check_investment_pattern(message: Message):
     if message.chat.type in ["group", "supergroup"]:
         asyncio.create_task(delete_after_delay(message.chat.type, message.chat.id, message.message_id))
@@ -237,22 +223,24 @@ async def check_investment_pattern(message: Message):
     """, message.from_user.id, message.chat.id)
     await conn.close()
 
-    if row:
-        text = f"💰 پول: {row['money']} | 🛢 نفت: {row['oil']} | 📈 Level {row['level']}"
-    else:
-        text = "📭 شما هیچ موجودی در این گروه ندارید."
+    text = (
+        f"💰 پول: {row['money']} | 🛢 نفت: {row['oil']} | 📈 Level {row['level']}"
+        if row else "📭 شما هیچ موجودی در این گروه ندارید."
+    )
 
     msg = await message.answer(text)
     if message.chat.type in ["group", "supergroup"]:
         asyncio.create_task(delete_after_delay(message.chat.type, message.chat.id, msg.message_id))
 
 # -----------------------------
-# هندلر منوی شیشه‌ای (callback)
+# هندلر منوی شیشه‌ای
 # -----------------------------
-@router.callback_query()
+@dp.callback_query()
 async def process_menu_selection(callback: types.CallbackQuery):
     chat_type = callback.message.chat.type
-    if callback.data == "view_resources":
+    data = callback.data
+
+    if data == "view_resources":
         conn = await get_db()
         row = await conn.fetchrow("""
             SELECT money, oil, level
@@ -262,37 +250,25 @@ async def process_menu_selection(callback: types.CallbackQuery):
         """, callback.from_user.id, callback.message.chat.id)
         await conn.close()
 
-        if row:
-            msg = await callback.message.answer(
-                f"💰 پول: {row['money']} | 🛢 نفت: {row['oil']} | 📈 Level {row['level']}"
-            )
-            if chat_type in ["group", "supergroup"]:
-                asyncio.create_task(delete_after_delay(chat_type, callback.message.chat.id, msg.message_id))
-        else:
-            msg = await callback.message.answer("📭 موجودی یافت نشد.")
-            if chat_type in ["group", "supergroup"]:
-                asyncio.create_task(delete_after_delay(chat_type, callback.message.chat.id, msg.message_id))
+        msg_text = (f"💰 پول: {row['money']} | 🛢 نفت: {row['oil']} | 📈 Level {row['level']}"
+                    if row else "📭 موجودی یافت نشد.")
+        msg = await callback.message.answer(msg_text)
 
-    elif callback.data == "attack_enemy":
+    elif data == "attack_enemy":
         msg = await callback.message.answer("⚔ عملیات حمله شروع شد!")
-        if chat_type in ["group", "supergroup"]:
-            asyncio.create_task(delete_after_delay(chat_type, callback.message.chat.id, msg.message_id))
-    elif callback.data == "upgrade_building":
+    elif data == "upgrade_building":
         msg = await callback.message.answer("🏗 ساختمان در حال ارتقاء است...")
-        if chat_type in ["group", "supergroup"]:
-            asyncio.create_task(delete_after_delay(chat_type, callback.message.chat.id, msg.message_id))
-    elif callback.data == "defense_up":
+    elif data == "defense_up":
         msg = await callback.message.answer("🛡 دفاع نیروها تقویت شد!")
-        if chat_type in ["group", "supergroup"]:
-            asyncio.create_task(delete_after_delay(chat_type, callback.message.chat.id, msg.message_id))
-    elif callback.data == "level_up":
+    elif data == "level_up":
         msg = await callback.message.answer("📈 سطح شما افزایش یافت!")
-        if chat_type in ["group", "supergroup"]:
-            asyncio.create_task(delete_after_delay(chat_type, callback.message.chat.id, msg.message_id))
-    elif callback.data == "buy_resources":
+    elif data == "buy_resources":
         msg = await callback.message.answer("🪙 خرید منابع انجام شد!")
-        if chat_type in ["group", "supergroup"]:
-            asyncio.create_task(delete_after_delay(chat_type, callback.message.chat.id, msg.message_id))
+    else:
+        msg = None
+
+    if msg and chat_type in ["group", "supergroup"]:
+        asyncio.create_task(delete_after_delay(chat_type, callback.message.chat.id, msg.message_id))
 
     await callback.answer()
 
@@ -315,12 +291,12 @@ async def handle_webhook(request: web.Request):
     return web.Response()
 
 def main():
-    dp.include_router(router)
     app = web.Application()
     app.router.add_post(WEBHOOK_PATH, handle_webhook)
     app.on_startup.append(on_startup)
     app.on_cleanup.append(on_shutdown)
     web.run_app(app, host="0.0.0.0", port=PORT)
+    print("Bot Is Running! Update? Coming Soon")
 
 if __name__ == "__main__":
     main()
