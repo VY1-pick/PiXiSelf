@@ -13,7 +13,7 @@ from aiohttp import web
 from aiogram import Bot, Dispatcher, Router, types
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
-from aiogram.filters import Command, Regexp
+from aiogram.filters import Command
 from aiogram.types import (
     Message,
     InlineKeyboardMarkup,
@@ -210,7 +210,7 @@ async def cmd_panel(message: Message):
 # -----------------------------
 # نمایش موجودی بعد از ارسال سرمایه در گروه
 # -----------------------------
-@router.message(Regexp(r"سرمایه"))
+@router.message(lambda m: m.text and "سرمایه" in m.text)
 async def check_investment_pattern(message: Message):
     asyncio.create_task(delete_after_delay(message.chat.id, message.message_id))
 
@@ -231,6 +231,7 @@ async def check_investment_pattern(message: Message):
 
     msg = await message.answer(text)
     asyncio.create_task(delete_after_delay(message.chat.id, msg.message_id))
+
 
 # -----------------------------
 # هندلر منوی شیشه‌ای (callback)
@@ -302,5 +303,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
