@@ -8,20 +8,18 @@ import logging
 import asyncio
 import asyncpg
 import json
-from datetime import datetime
+from datetime import datetime, UTC
 from aiohttp import web
 from logging.handlers import RotatingFileHandler
+from functools import wraps
 
 from aiogram import Bot, Dispatcher, types
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
-from aiogram.filters import Command
+from aiogram.filters import Command, Text
 from aiogram.types import (
-    Message,
-    InlineKeyboardMarkup,
-    InlineKeyboardButton,
-    ChatMemberUpdated,
-    Update
+    Message, InlineKeyboardMarkup, InlineKeyboardButton,
+    ChatMemberUpdated, Update
 )
 from aiogram.utils.markdown import hbold
 
@@ -38,7 +36,7 @@ WEBHOOK_PATH = "/webhook"
 WEBHOOK_URL = f"https://{RAILWAY_PROJECT_URL}{WEBHOOK_PATH}"
 
 # ==============================
-# Bot & Dispatcher Instance
+# Bot & Dispatcher
 # ==============================
 bot = Bot(
     token=BOT_TOKEN,
@@ -47,7 +45,7 @@ bot = Bot(
 dp = Dispatcher()
 
 # ==============================
-# Modern Logging System
+# Modern Logging
 # ==============================
 LOG_DIR = "logs"
 os.makedirs(LOG_DIR, exist_ok=True)
@@ -55,7 +53,7 @@ os.makedirs(LOG_DIR, exist_ok=True)
 class JsonFormatter(logging.Formatter):
     def format(self, record):
         log_record = {
-            "time": datetime.utcnow().isoformat(),
+            "time": datetime.now(UTC).isoformat(),
             "level": record.levelname,
             "module": record.module,
             "funcName": record.funcName,
@@ -91,16 +89,17 @@ logger.addHandler(file_handler)
 # Exception Logging Decorator
 # ==============================
 def log_exceptions(func):
+    @wraps(func)
     async def wrapper(*args, **kwargs):
         try:
             return await func(*args, **kwargs)
         except Exception:
-            logger.exception(f"Exception in handler {func.__name__}")
+            logger.exception(f"Exception in handler: {func.__name__}")
             raise
     return wrapper
 
 # ==============================
-# Database Queries
+# Database Structure
 # ==============================
 CREATE_GROUPS_TABLE = """
 CREATE TABLE IF NOT EXISTS groups (
@@ -166,7 +165,7 @@ def game_main_menu():
 # ==============================
 @dp.message(Command("start"))
 @log_exceptions
-async def start_cmd(message: Message):
+async def start_cmd(message: Message, **kwargs):
     logger.info(f"/start from user {message.from_user.id} in {message.chat.type}")
     if message.chat.type in ["group", "supergroup"]:
         asyncio.create_task(delete_after_delay(message.chat.type, message.chat.id, message.message_id))
@@ -193,10 +192,10 @@ async def start_cmd(message: Message):
         )
         await message.answer(text, reply_markup=add_button)
 
-@dp.message(lambda m: m.text and m.text.strip() == "شروع جنگ")
+@dp.message(Text(text="شروع جنگ", ignore_case=True))
 @log_exceptions
-async def start_war(message: Message):
-    if message.chat.type != "group" and message.chat.type != "supergroup":
+async def start_war(message: Message, **kwargs):
+    if message.chat.type not in ["group", "supergroup"]:
         await message.answer("⚠ این دستور فقط در گروه اجرا می‌شود.")
         return
     asyncio.create_task(delete_after_delay(message.chat.type, message.chat.id, message.message_id))
@@ -212,12 +211,12 @@ async def start_war(message: Message):
         ON CONFLICT (chat_id) DO NOTHING;
     """, message.chat.id, message.chat.title)
     await conn.close()
-    msg = await message.answer("🪖 گروه ثبت شد و آماده دریافت دستورات است!")
+    msg = await message.answer("🪖 گروه ثبت شد و آماده دریافت دستورات است!", reply_markup=game_main_menu())
     asyncio.create_task(delete_after_delay(message.chat.type, message.chat.id, msg.message_id))
 
 @dp.message(Command("panel"))
 @log_exceptions
-async def cmd_panel(message: Message):
+async def cmd_panel(message: Message, **kwargs):
     if message.chat.type in ["group", "supergroup"]:
         asyncio.create_task(delete_after_delay(message.chat.type, message.chat.id, message.message_id))
         msg = await message.answer("⚠ این دستور فقط در چت خصوصی اجرا می‌شود.")
@@ -242,7 +241,7 @@ async def cmd_panel(message: Message):
 
 @dp.callback_query()
 @log_exceptions
-async def process_menu_selection(callback: types.CallbackQuery):
+async def process_menu_selection(callback: types.CallbackQuery, **kwargs):
     chat_type = callback.message.chat.type
     data = callback.data
     logger.info(f"Callback {data} from user {callback.from_user.id}")
